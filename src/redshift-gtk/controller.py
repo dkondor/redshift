@@ -37,6 +37,7 @@ class RedshiftController(GObject.GObject):
         'temperature-changed': (GObject.SIGNAL_RUN_FIRST, None, (int,)),
         'period-changed': (GObject.SIGNAL_RUN_FIRST, None, (str,)),
         'location-changed': (GObject.SIGNAL_RUN_FIRST, None, (float, float)),
+        'brightness-changed': (GObject.SIGNAL_RUN_FIRST, None, (float,)),
         'error-occured': (GObject.SIGNAL_RUN_FIRST, None, (str,)),
         'stopped': (GObject.SIGNAL_RUN_FIRST, None, ()),
     }
@@ -54,6 +55,7 @@ class RedshiftController(GObject.GObject):
         self._temperature = 0
         self._period = 'Unknown'
         self._location = (0.0, 0.0)
+        self._brightness = 1.0
 
         # Start redshift with arguments
         args.insert(0, os.path.join(defs.BINDIR, 'redshift'))
@@ -127,6 +129,11 @@ class RedshiftController(GObject.GObject):
     def location(self):
         """Current location."""
         return self._location
+    
+    @property
+    def brightness(self):
+        """Current brightness."""
+        return self._brightness
 
     def set_inhibit(self, inhibit):
         """Set inhibition state."""
@@ -190,6 +197,11 @@ class RedshiftController(GObject.GObject):
             if new_location != self._location:
                 self._location = new_location
                 self.emit('location-changed', *new_location)
+        elif key == 'Brightness':
+            new_brightness = float(value)
+            if new_brightness != self._brightness:
+                self._brightness = new_brightness
+                self.emit('brightness-changed', new_brightness)
 
     def _child_stdout_line_cb(self, line):
         """Called when the child process outputs a line to stdout."""

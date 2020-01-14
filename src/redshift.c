@@ -1087,7 +1087,7 @@ main(int argc, char *argv[])
 	}
 
 	if (options.verbose) {
-		printf(_("Brightness: %.2f:%.2f\n"),
+		printf(_("Brightness (day / night): %.2f:%.2f\n"),
 		       options.scheme.day.brightness,
 		       options.scheme.night.brightness);
 	}
