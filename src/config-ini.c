@@ -14,9 +14,12 @@
    You should have received a copy of the GNU General Public License
    along with Redshift.  If not, see <http://www.gnu.org/licenses/>.
 
-   Copyright (c) 2010  Jon Lund Steffensen <jonlst@gmail.com>
+   Copyright (c) 2010-2018  Jon Lund Steffensen <jonlst@gmail.com>
 */
 
+#ifdef HAVE_CONFIG_H
+# include "config.h"
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,8 +66,15 @@ open_config_file(const char *filepath)
 
 		if (f == NULL && (env = getenv("XDG_CONFIG_HOME")) != NULL &&
 		    env[0] != '\0') {
-			snprintf(cp, sizeof(cp), "%s/redshift.conf", env);
+			snprintf(cp, sizeof(cp),
+					 "%s/redshift/redshift.conf", env);
 			f = fopen(cp, "r");
+			if (f == NULL) {
+				/* Fall back to formerly used path. */
+				snprintf(cp, sizeof(cp),
+						 "%s/redshift.conf", env);
+				f = fopen(cp, "r");
+			}
 		}
 
 #ifdef _WIN32
@@ -78,8 +88,14 @@ open_config_file(const char *filepath)
 		if (f == NULL && (env = getenv("HOME")) != NULL &&
 		    env[0] != '\0') {
 			snprintf(cp, sizeof(cp),
-				 "%s/.config/redshift.conf", env);
+				 "%s/.config/redshift/redshift.conf", env);
 			f = fopen(cp, "r");
+			if (f == NULL) {
+				/* Fall back to formerly used path. */
+				snprintf(cp, sizeof(cp),
+					 "%s/.config/redshift.conf", env);
+				f = fopen(cp, "r");
+			}
 		}
 #ifndef _WIN32
 
@@ -87,8 +103,14 @@ open_config_file(const char *filepath)
 			struct passwd *pwd = getpwuid(getuid());
 			char *home = pwd->pw_dir;
 			snprintf(cp, sizeof(cp),
-				 "%s/.config/redshift.conf", home);
+				 "%s/.config/redshift/redshift.conf", home);
 			f = fopen(cp, "r");
+			if (f == NULL) {
+				/* Fall back to formerly used path. */
+				snprintf(cp, sizeof(cp),
+					 "%s/.config/redshift.conf", home);
+				f = fopen(cp, "r");
+			}
 		}
 
 		if (f == NULL && (env = getenv("XDG_CONFIG_DIRS")) != NULL &&
@@ -101,9 +123,14 @@ open_config_file(const char *filepath)
 				int len = end - begin;
 				if (len > 0) {
 					snprintf(cp, sizeof(cp),
-						 "%.*s/redshift.conf", len, begin);
-
+						 "%.*s/redshift/redshift.conf", len, begin);
 					f = fopen(cp, "r");
+					if (f != NULL) {
+						/* Fall back to formerly used path. */
+						snprintf(cp, sizeof(cp),
+							 "%.*s/redshift.conf", len, begin);
+						f = fopen(cp, "r");
+					}
 					if (f != NULL) break;
 				}
 
@@ -157,7 +184,7 @@ config_ini_init(config_ini_state_t *state, const char *filepath)
 		s[strcspn(s, "\r\n")] = '\0';
 
 		/* Skip comments and empty lines. */
-		if (s[0] == ';' || s[0] == '\0') continue;
+		if (s[0] == ';' || s[0] == '#' || s[0] == '\0') continue;
 
 		if (s[0] == '[') {
 			/* Read name of section. */
