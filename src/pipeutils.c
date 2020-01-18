@@ -28,7 +28,17 @@
 int
 pipeutils_create_nonblocking(int pipefds[2])
 {
-	int r = pipe(pipefds);
+	/* note: try to ensure close-on-exec semantics on any
+	 * file descriptor opened -- pipe2() is Linux-specific */
+	int r;
+#ifdef _GNU_SOURCE
+	r = pipe2(pipefds, O_CLOEXEC | O_NONBLOCK);
+	if (r == -1) {
+		perror("pipe2");
+		return -1;
+	}
+#else
+	r = pipe(pipefds);
 	if (r == -1) {
 		perror("pipe");
 		return -1;
@@ -42,7 +52,7 @@ pipeutils_create_nonblocking(int pipefds[2])
 		return -1;
 	}
 
-	r = fcntl(pipefds[0], F_SETFL, flags | O_NONBLOCK);
+	r = fcntl(pipefds[0], F_SETFL, flags | O_NONBLOCK | O_CLOEXEC);
 	if (r == -1) {
 		perror("fcntl");
 		close(pipefds[0]);
@@ -58,13 +68,14 @@ pipeutils_create_nonblocking(int pipefds[2])
 		return -1;
 	}
 
-	r = fcntl(pipefds[1], F_SETFL, flags | O_NONBLOCK);
+	r = fcntl(pipefds[1], F_SETFL, flags | O_NONBLOCK | O_CLOEXEC);
 	if (r == -1) {
 		perror("fcntl");
 		close(pipefds[0]);
 		close(pipefds[1]);
 		return -1;
 	}
+#endif /* _GNU_SOURCE */
 
 	return 0;
 }

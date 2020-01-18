@@ -23,8 +23,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef ENABLE_NLS
+# include <libintl.h>
+# define _(s) gettext(s)
+# define N_(s) (s)
+#else
+# define _(s) s
+# define N_(s) s
+# define gettext(s) s
+#endif
+
 /* The color temperature when no adjustment is applied. */
 #define NEUTRAL_TEMP  6500
+
+/* Bounds for parameters. */
+#define MIN_LAT   -90.0
+#define MAX_LAT    90.0
+#define MIN_LON  -180.0
+#define MAX_LON   180.0
+#define MIN_TEMP   1000
+#define MAX_TEMP  25000
+#define MIN_BRIGHTNESS  0.1
+#define MAX_BRIGHTNESS  1.0
+#define MIN_GAMMA   0.1
+#define MAX_GAMMA  10.0
+
+#undef CLAMP
+#define CLAMP(lo,mid,up)  (((lo) > (mid)) ? (lo) : (((mid) < (up)) ? (mid) : (up)))
 
 
 /* Location */
@@ -54,7 +79,8 @@ typedef enum {
 	PROGRAM_MODE_ONE_SHOT,
 	PROGRAM_MODE_PRINT,
 	PROGRAM_MODE_RESET,
-	PROGRAM_MODE_MANUAL
+	PROGRAM_MODE_MANUAL,
+	PROGRAM_MODE_SEND_CMDS
 } program_mode_t;
 
 /* Time range.
@@ -64,6 +90,10 @@ typedef struct {
 	int end;
 } time_range_t;
 
+
+#define USE_OVERRIDE_BRIGHTNESS 1
+#define USE_OVERRIDE_TEMP 2
+#define USE_OVERRIDE_GAMMA 4
 /* Transition scheme.
    The solar elevations at which the transition begins/ends,
    and the association color settings. */
@@ -75,6 +105,8 @@ typedef struct {
 	time_range_t dusk;
 	color_setting_t day;
 	color_setting_t night;
+	color_setting_t override; /* if given, use this instead of the setting based of the period */
+	unsigned int use_override; /* bitmask of which settings are "overriden" -- see definitions above */
 } transition_scheme_t;
 
 

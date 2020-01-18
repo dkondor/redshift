@@ -193,7 +193,8 @@ print_help(const char *program_name)
 		" color effect\n"
 		"  -x\t\tReset mode (remove adjustment from screen)\n"
 		"  -r\t\tDisable fading between color temperatures\n"
-		"  -t DAY:NIGHT\tColor temperature to set at daytime/night\n"),
+		"  -t DAY:NIGHT\tColor temperature to set at daytime/night\n"
+		"  -C control redshift by commands read from stdin\n"),
 	      stdout);
 	fputs("\n", stdout);
 
@@ -309,6 +310,11 @@ options_init(options_t *options)
 	options->scheme.night.temperature = -1;
 	options->scheme.night.gamma[0] = NAN;
 	options->scheme.night.brightness = NAN;
+	
+	options->scheme.override.temperature = -1;
+	options->scheme.override.gamma[0] = NAN;
+	options->scheme.override.brightness = NAN;
+	options->scheme.use_override = 0;
 
 	/* Temperature for manual mode */
 	options->temp_set = -1;
@@ -323,6 +329,9 @@ options_init(options_t *options)
 	options->preserve_gamma = 1;
 	options->mode = PROGRAM_MODE_CONTINUAL;
 	options->verbose = 0;
+	options->control_stdin = 0;
+	options->control_socket = 0;
+	options->socket_name = NULL;
 }
 
 /* Parse a single option from the command-line. */
@@ -456,6 +465,17 @@ parse_command_line_option(
 	case 'r':
 		options->use_fade = 0;
 		break;
+	case 'C':
+		options->control_stdin = 1;
+		break;
+	case 's':
+		options->control_socket = 1;
+		break;
+	case 'f':
+		free(options->socket_name);
+		options->socket_name = strdup(value);
+		options->control_socket = 1;
+		break;
 	case 't':
 		s = strchr(value, ':');
 		if (s == NULL) {
@@ -477,6 +497,9 @@ parse_command_line_option(
 	case 'x':
 		options->mode = PROGRAM_MODE_RESET;
 		break;
+	case 'S':
+		options->mode = PROGRAM_MODE_SEND_CMDS;
+		break;
 	case '?':
 		fputs(_("Try `-h' for more information.\n"), stderr);
 		return -1;
@@ -495,7 +518,7 @@ options_parse_args(
 {
 	const char* program_name = argv[0];
 	int opt;
-	while ((opt = getopt(argc, argv, "b:c:g:hl:m:oO:pPrt:vVx")) != -1) {
+	while ((opt = getopt(argc, argv, "b:c:g:hl:m:oO:pPrt:vVxCsSf:")) != -1) {
 		char option = opt;
 		int r = parse_command_line_option(
 			option, optarg, options, program_name, gamma_methods,
@@ -615,6 +638,12 @@ parse_config_file_option(
 				return -1;
 			}
 		}
+	} else if (strcasecmp(key, "control-stdin") == 0) {
+		options->control_stdin = 1;
+	} else if (strcasecmp(key, "control-socket") == 0) {
+		options->control_socket = 1;
+	} else if (strcasecmp(key, "socket-name") == 0) {
+		if(!options->socket_name) options->socket_name = strdup(value);
 	} else {
 		fprintf(stderr, _("Unknown configuration setting `%s'.\n"),
 			key);
@@ -676,4 +705,7 @@ options_set_defaults(options_t *options)
 	}
 
 	if (options->use_fade < 0) options->use_fade = 1;
+	
+	if (!options->socket_name)
+		options->socket_name = strdup("/tmp/redshift_socket");
 }

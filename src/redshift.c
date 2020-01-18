@@ -48,16 +48,6 @@ int poll(struct pollfd *fds, int nfds, int timeout) { abort(); return -1; }
 # include <signal.h>
 #endif
 
-#ifdef ENABLE_NLS
-# include <libintl.h>
-# define _(s) gettext(s)
-# define N_(s) (s)
-#else
-# define _(s) s
-# define N_(s) s
-# define gettext(s) s
-#endif
-
 #include "redshift.h"
 #include "config-ini.h"
 #include "solar.h"
@@ -65,6 +55,7 @@ int poll(struct pollfd *fds, int nfds, int timeout) { abort(); return -1; }
 #include "hooks.h"
 #include "signals.h"
 #include "options.h"
+#include "commands.h"
 
 /* pause() is not defined on windows platform but is not needed either.
    Use a noop macro instead. */
@@ -105,28 +96,16 @@ int poll(struct pollfd *fds, int nfds, int timeout) { abort(); return -1; }
 # include "location-corelocation.h"
 #endif
 
-#undef CLAMP
-#define CLAMP(lo,mid,up)  (((lo) > (mid)) ? (lo) : (((mid) < (up)) ? (mid) : (up)))
-
-
-/* Bounds for parameters. */
-#define MIN_LAT   -90.0
-#define MAX_LAT    90.0
-#define MIN_LON  -180.0
-#define MAX_LON   180.0
-#define MIN_TEMP   1000
-#define MAX_TEMP  25000
-#define MIN_BRIGHTNESS  0.1
-#define MAX_BRIGHTNESS  1.0
-#define MIN_GAMMA   0.1
-#define MAX_GAMMA  10.0
-
 /* Duration of sleep between screen updates (milliseconds). */
 #define SLEEP_DURATION        5000
 #define SLEEP_DURATION_SHORT  100
 
 /* Length of fade in numbers of short sleep durations. */
 #define FADE_LENGTH  40
+
+
+#define LINE_LENGTH 256
+static char stdin_line_buf[LINE_LENGTH];
 
 
 /* Names of periods of day */
@@ -280,11 +259,31 @@ interpolate_transition_scheme(
 	double alpha,
 	color_setting_t *result)
 {
-	const color_setting_t *day = &transition->day;
-	const color_setting_t *night = &transition->night;
-
+	const color_setting_t *second = &transition->day;
+	const color_setting_t *first = &transition->night;
+	const color_setting_t *override = &transition->override;
+	
 	alpha = CLAMP(0.0, alpha, 1.0);
-	interpolate_color_settings(night, day, alpha, result);
+	
+	if(transition->use_override & USE_OVERRIDE_BRIGHTNESS)
+		result->brightness = override->brightness;
+	else result->brightness = (1.0-alpha)*first->brightness +
+		alpha*second->brightness;
+	if(transition->use_override & USE_OVERRIDE_TEMP)
+		result->temperature = override->temperature;
+	else result->temperature = (1.0-alpha)*first->temperature +
+		alpha*second->temperature;
+	for(int i = 0; i < 3; i++) {
+		if(transition->use_override & USE_OVERRIDE_GAMMA)
+			result->gamma[i] = override->gamma[i];
+		else result->gamma[i] = (1.0-alpha)*first->gamma[i] +
+			alpha*second->gamma[i];
+	}
+	
+	
+		//~ alpha = CLAMP(0.0, alpha, 1.0);
+		//~ interpolate_color_settings(night, day, alpha, result);
+	
 }
 
 /* Return 1 if color settings have major differences, otherwise 0.
@@ -600,7 +599,8 @@ ease_fade(double t)
 static int
 run_continual_mode(const location_provider_t *provider,
 		   location_state_t *location_state,
-		   const transition_scheme_t *scheme,
+		   transition_scheme_t *scheme,
+		   command_fds_t* cmdfds,
 		   const gamma_method_t *method,
 		   gamma_state_t *method_state,
 		   int use_fade, int preserve_gamma, int verbose)
@@ -651,7 +651,7 @@ run_continual_mode(const location_provider_t *provider,
 
 		print_location(&loc);
 	}
-
+	
 	if (verbose) {
 		printf(_("Color temperature: %uK\n"), interp.temperature);
 		printf(_("Brightness: %.2f\n"), interp.brightness);
@@ -716,6 +716,12 @@ run_continual_mode(const location_provider_t *provider,
 					scheme, elevation);
 		}
 
+		/* reset overrides on period change */
+		if(period != prev_period && period == PERIOD_TRANSITION) {
+			scheme->use_override = 0;
+			color_setting_reset(&(scheme->override));
+		}
+		
 		/* Use transition progress to get target color
 		   temperature. */
 		color_setting_t target_interp;
@@ -744,6 +750,7 @@ run_continual_mode(const location_provider_t *provider,
 		if (period != prev_period) {
 			hooks_signal_period_change(prev_period, period);
 		}
+		
 
 		/* Start fade if the parameter differences are too big to apply
 		   instantly. */
@@ -817,21 +824,30 @@ run_continual_mode(const location_provider_t *provider,
 
 		/* Update location. */
 		int loc_fd = -1;
+		int nfds_active = 0;
 		if (need_location) {
 			loc_fd = provider->get_fd(location_state);
 		}
-
 		if (loc_fd >= 0) {
-			/* Provider is dynamic. */
-			struct pollfd pollfds[1];
-			pollfds[0].fd = loc_fd;
-			pollfds[0].events = POLLIN;
-			int r = poll(pollfds, 1, delay);
+			nfds_active++;
+			cmdfds->pollfds[0].fd = loc_fd;
+			cmdfds->pollfds[0].events = POLLIN;
+			cmdfds->pollfds[0].revents = 0;
+		}
+		if(cmdfds->pollfds[1].fd >= 0) nfds_active++;
+		if(cmdfds->max_socket_fds) {
+			int i;
+			for(i = 2; i < cmdfds->max_socket_fds + 3; i++)
+				if(cmdfds->pollfds[i].fd >= 0) nfds_active++;
+		}
+		
+		if (nfds_active) {
+			struct pollfd* pollfds = cmdfds->pollfds;
+			int r = poll(pollfds, cmdfds->max_socket_fds + 3, delay);
 			if (r < 0) {
-				if (errno == EINTR) continue;
+				if (errno == EINTR) { errno = 0; continue; }
 				perror("poll");
-				fputs(_("Unable to get location"
-					" from provider.\n"), stderr);
+				fputs(_("Error polling for input.\n"), stderr);
 				return -1;
 			} else if (r == 0) {
 				continue;
@@ -839,40 +855,44 @@ run_continual_mode(const location_provider_t *provider,
 
 			/* Get new location and availability
 			   information. */
-			location_t new_loc;
-			int new_available;
-			r = provider->handle(
-				location_state, &new_loc,
-				&new_available);
-			if (r < 0) {
-				fputs(_("Unable to get location"
-					" from provider.\n"), stderr);
-				return -1;
+			if (pollfds[0].revents) {
+				location_t new_loc;
+				int new_available;
+				r = provider->handle(
+					location_state, &new_loc,
+					&new_available);
+				if (r < 0) {
+					fputs(_("Unable to get location"
+						" from provider.\n"), stderr);
+					return -1;
+				}
+	
+				if (!new_available &&
+				    new_available != location_available) {
+					fputs(_("Location is temporarily"
+					        " unavailable; Using previous"
+						" location until it becomes"
+						" available...\n"), stderr);
+				}
+	
+				if (new_available &&
+				    (new_loc.lat != loc.lat ||
+				     new_loc.lon != loc.lon ||
+				     new_available != location_available)) {
+					loc = new_loc;
+					print_location(&loc);
+				}
+	
+				location_available = new_available;
+	
+				if (!location_is_valid(&loc)) {
+					fputs(_("Invalid location returned"
+						" from provider.\n"), stderr);
+					return -1;
+				}
 			}
-
-			if (!new_available &&
-			    new_available != location_available) {
-				fputs(_("Location is temporarily"
-				        " unavailable; Using previous"
-					" location until it becomes"
-					" available...\n"), stderr);
-			}
-
-			if (new_available &&
-			    (new_loc.lat != loc.lat ||
-			     new_loc.lon != loc.lon ||
-			     new_available != location_available)) {
-				loc = new_loc;
-				print_location(&loc);
-			}
-
-			location_available = new_available;
-
-			if (!location_is_valid(&loc)) {
-				fputs(_("Invalid location returned"
-					" from provider.\n"), stderr);
-				return -1;
-			}
+			r = handle_poll_results(cmdfds, scheme, &interp,
+				&disabled, verbose);
 		} else {
 			systemtime_msleep(delay);
 		}
@@ -943,7 +963,7 @@ main(int argc, char *argv[])
 	options_init(&options);
 	options_parse_args(
 		&options, argc, argv, gamma_methods, location_providers);
-
+	
 	/* Load settings from config file. */
 	config_ini_state_t config_state;
 	r = config_ini_init(&config_state, options.config_filepath);
@@ -958,7 +978,14 @@ main(int argc, char *argv[])
 		&options, &config_state, gamma_methods, location_providers);
 
 	options_set_defaults(&options);
-
+	
+	if (options.mode == PROGRAM_MODE_SEND_CMDS) {
+		r = send_commands(options.socket_name, argv + optind, argc - optind);
+		free(options.config_filepath);
+		free(options.socket_name);
+		return r;
+	}
+	
 	if (options.scheme.dawn.start >= 0 || options.scheme.dawn.end >= 0 ||
 	    options.scheme.dusk.start >= 0 || options.scheme.dusk.end >= 0) {
 		if (options.scheme.dawn.start < 0 ||
@@ -1275,6 +1302,37 @@ main(int argc, char *argv[])
 		}
 	}
 	break;
+	case PROGRAM_MODE_CONTINUAL:
+	{
+		command_fds_t* cmdfds = 
+			command_fds_alloc(options.control_socket ? 8 : 0);
+		if(!cmdfds) {
+			printf(_("Error allocating memory!\n"));
+			exit(EXIT_FAILURE);
+		}
+		if(options.control_socket) create_socket(options.socket_name,
+			cmdfds);
+		if(options.control_stdin) {
+			cmdfds->pollfds[1].fd = fileno(stdin);
+			cmdfds->pollfds[1].events = POLLIN;
+			cmdfds->pollfds[1].revents = 0;
+		}
+		
+		r = run_continual_mode(
+			options.provider, location_state, scheme,
+			cmdfds, options.method, method_state,
+			options.use_fade, options.preserve_gamma,
+			options.verbose);
+		command_fds_free(cmdfds);
+		if(options.control_socket) unlink(options.socket_name);
+		
+		if (r >= 0) break;
+		/* if there was a failure, try to reset the screen 
+		 * on OSX, we can just exit, for other methods,
+		 * we fall through to the next case */
+		if (strcmp(options.method->name, "quartz") == 0) break;
+	}
+	/* intentional fallthrough for error conditions */
 	case PROGRAM_MODE_RESET:
 	{
 		/* Reset screen */
@@ -1297,16 +1355,6 @@ main(int argc, char *argv[])
 		}
 	}
 	break;
-	case PROGRAM_MODE_CONTINUAL:
-	{
-		r = run_continual_mode(
-			options.provider, location_state, scheme,
-			options.method, method_state,
-			options.use_fade, options.preserve_gamma,
-			options.verbose);
-		if (r < 0) exit(EXIT_FAILURE);
-	}
-	break;
 	}
 
 	/* Clean up gamma adjustment state */
@@ -1318,6 +1366,7 @@ main(int argc, char *argv[])
 	if (need_location) {
 		options.provider->free(location_state);
 	}
+	free(options.socket_name);
 
-	return EXIT_SUCCESS;
+	return r ? EXIT_FAILURE : EXIT_SUCCESS;
 }

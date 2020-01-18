@@ -36,7 +36,13 @@ typedef struct {
 	int use_fade;
 	/* Whether to preserve gamma ramps if supported by gamma method. */
 	int preserve_gamma;
-
+	/* Whether to accept commands on stdin */
+	int control_stdin;
+	/* Whether to accept commands on a UNIX socket */
+	int control_socket;
+	/* Filename of the socket to use */
+	char* socket_name;
+	
 	/* Selected gamma method. */
 	const gamma_method_t *method;
 	/* Arguments for gamma method. */
