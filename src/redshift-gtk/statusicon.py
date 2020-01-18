@@ -37,6 +37,11 @@ try:
     from gi.repository import AppIndicator3 as appindicator
 except (ImportError, ValueError):
     appindicator = None
+    
+try:
+    from gi.repository import Notify as notify
+except (ImportError, ValueError):
+    notify = None
 
 from .controller import RedshiftController
 from . import defs
@@ -70,7 +75,9 @@ class RedshiftStatusIcon(object):
             self.status_icon = Gtk.StatusIcon()
             self.status_icon.set_from_icon_name(icon_name)
             self.status_icon.set_tooltip_text('Redshift')
-
+        
+        
+        
         # Create popup menu
         self.status_menu = Gtk.Menu()
 
@@ -111,10 +118,20 @@ class RedshiftStatusIcon(object):
         info_item.connect('activate', self.show_info_cb)
         self.status_menu.append(info_item)
 
+        # Add toggle for notifications
+        self.notification = None
+        if notify:
+            notify.init("redshift-gtk")
+            self.notification_toggle = Gtk.CheckMenuItem.new_with_label(_('Brightness notifications'))
+            self.notification_toggle.connect('activate', self.notification_toggle_cb)
+            self.status_menu.append(self.notification_toggle)
+            self.notification_toggle.set_active(True)
+            
         # Add quit action
         quit_item = Gtk.ImageMenuItem.new_with_label(_('Quit'))
         quit_item.connect('activate', self.destroy_cb)
         self.status_menu.append(quit_item)
+        
 
         # Create info dialog
         self.info_dialog = Gtk.Window(title=_('Info'))
@@ -149,6 +166,12 @@ class RedshiftStatusIcon(object):
         self.period_label.set_padding(6, 6)
         content_area.pack_start(self.period_label, True, True, 0)
         self.period_label.show()
+        
+        self.brightness_label = Gtk.Label()
+        self.brightness_label.set_alignment(0.0, 0.5)
+        self.brightness_label.set_padding(6, 6)
+        content_area.pack_start(self.brightness_label, True, True, 0)
+        self.brightness_label.show()
 
         self.close_button = Gtk.Button(label=_('Close'))
         content_area.pack_start(self.close_button, True, True, 0)
@@ -161,6 +184,7 @@ class RedshiftStatusIcon(object):
         self._controller.connect(
             'temperature-changed', self.temperature_change_cb)
         self._controller.connect('location-changed', self.location_change_cb)
+        self._controller.connect('brightness-changed', self.brightness_change_cb)
         self._controller.connect('error-occured', self.error_occured_cb)
         self._controller.connect('stopped', self.controller_stopped_cb)
         self.icon_theme.connect('changed', self.on_icon_theme_changed_cb)
@@ -170,6 +194,7 @@ class RedshiftStatusIcon(object):
         self.change_period(self._controller.period)
         self.change_temperature(self._controller.temperature)
         self.change_location(self._controller.location)
+        self.change_brightness(self._controller.brightness)
 
         if appindicator:
             self.status_menu.show_all()
@@ -184,6 +209,8 @@ class RedshiftStatusIcon(object):
 
         # Initialize suspend timer
         self.suspend_timer = None
+        
+        
 
     def remove_suspend_timer(self):
         """Disable any previously set suspend timer."""
@@ -234,6 +261,19 @@ class RedshiftStatusIcon(object):
         if active != widget.get_active():
             self.remove_suspend_timer()
             self._controller.set_inhibit(not self._controller.inhibited)
+    
+    def notification_toggle_cb(self, widget, data=None):
+        """Callback to enable desktop notifications about brightness changes."""
+        notify_enable = self.notification_toggle.get_active()
+        if notify_enable:
+            if self.notification is None:
+                self.notification = notify.Notification.new("Display brightness")
+                self.notification.set_timeout(1500)
+                # workaround for Ubuntu Notify-OSD that does not allow setting timeout
+                self.notification.set_hint_string("x-canonical-private-synchronous","1")
+        else:
+            if self.notification:
+                self.notification = None
 
     # Info dialog callbacks
     def show_info_cb(self, widget, data=None):
@@ -287,7 +327,11 @@ class RedshiftStatusIcon(object):
     def location_change_cb(self, controller, lat, lon):
         """Callback when controlled changes location."""
         self.change_location((lat, lon))
-
+    
+    def brightness_change_cb(self, controller, brightness):
+        """Callback when controlled changes brightness."""
+        self.change_brightness(brightness)
+    
     def error_occured_cb(self, controller, error):
         """Callback when an error occurs in the controller."""
         error_dialog = Gtk.MessageDialog(
@@ -329,13 +373,40 @@ class RedshiftStatusIcon(object):
         """Change interface to new location."""
         self.location_label.set_markup(
             '<b>{}:</b> {}, {}'.format(_('Location'), *location))
+    
+    def change_brightness(self, brightness):
+        """Change interface to new brightness value."""
+        self.brightness_label.set_markup(
+            '<b>{}:</b> {}'.format(_('Brightness'), brightness))
+        if self.notification:
+            br_int = int(brightness*100)
+            if br_int < 0:
+                br_int = 0
+            if br_int > 100:
+                br_int = 100
+            # select icon
+            if br_int < 10:
+                icon = 'notification-display-brightness-off'
+            elif br_int < 40:
+                icon = 'notification-display-brightness-low'
+            elif br_int < 70:
+                icon = 'notification-display-brightness-medium'
+            elif br_int < 100:
+                icon = 'notification-display-brightness-high'
+            else:
+                icon = 'notification-display-brightness-full'
+            self.notification.update('{}: {}%'.format(_('Display brightness'),br_int),None,icon)
+            self.notification.set_hint_int32('value',br_int)
+            self.notification.show()
 
+        
     def update_tooltip_text(self):
         """Update text of tooltip status icon."""
         if not appindicator:
-            self.status_icon.set_tooltip_text('{}: {}K, {}: {}'.format(
+            self.status_icon.set_tooltip_text('{}: {}K, {}: {}, {}: {}'.format(
                 _('Color temperature'), self._controller.temperature,
-                _('Period'), self._controller.period))
+                _('Period'), self._controller.period),
+                _('Brightness'), self._controller.brightness)
 
     def autostart_cb(self, widget, data=None):
         """Callback when a request to toggle autostart is made."""
@@ -347,6 +418,11 @@ class RedshiftStatusIcon(object):
             self.status_icon.set_visible(False)
         self.info_dialog.destroy()
         self._controller.terminate_child()
+        if notify:
+            if self.notification:
+                self.notification.close()
+                self.notification = None
+            notify.uninit()
         return False
 
 
