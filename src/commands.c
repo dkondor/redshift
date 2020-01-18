@@ -157,10 +157,7 @@ int handle_commands_socket(command_input_t* c, int fd, transition_scheme_t* sche
 	
 	ssize_t r = recv(fd,pos,buf_len - (pos-buf),MSG_PEEK);
 	
-	if(r < 0) return -1;
-	if(r == 0) {
-		/* TODO: handle closed socket! */
-	}
+	if(r <= 0) return -1;
 	
 	/* check if there is a newline in the text read */
 	char* pos0 = pos;
