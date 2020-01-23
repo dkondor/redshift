@@ -405,8 +405,8 @@ class RedshiftStatusIcon(object):
         if not appindicator:
             self.status_icon.set_tooltip_text('{}: {}K, {}: {}, {}: {}'.format(
                 _('Color temperature'), self._controller.temperature,
-                _('Period'), self._controller.period),
-                _('Brightness'), self._controller.brightness)
+                _('Period'), self._controller.period,
+                _('Brightness'), self._controller.brightness))
 
     def autostart_cb(self, widget, data=None):
         """Callback when a request to toggle autostart is made."""
