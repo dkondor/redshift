@@ -45,10 +45,8 @@ EXTRA_redshift_SOURCES = \
 
 AM_CFLAGS =
 EXTRA_DIST = windows/redshift.ico
-
-
-redshift_CFLAGS =
 redshift_LDADD = @LIBINTL@
+
 redshift_dbus_CFLAGS = \
 	$(GLIB_CFLAGS) $(GDBUS_CFLAGS) \
 	$(GEOCLUE_CFLAGS)
