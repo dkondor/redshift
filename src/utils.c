@@ -20,6 +20,8 @@
 
 
 #include <string.h>
+#include <math.h>
+#include <time.h>
 #include <poll.h>
 
 #include "utils.h"
@@ -35,6 +37,13 @@
 # define N_(s) s
 # define gettext(s) s
 #endif
+
+
+#define MIN_LAT   -90.0
+#define MAX_LAT    90.0
+#define MIN_LON  -180.0
+#define MAX_LON   180.0
+
 
 /* try starting an adjustment method */
 int
@@ -412,6 +421,135 @@ redshift_init_options(options_t* options, config_ini_state_t* config_state,
 	}
 	return 0;
 }
+
+
+/* Check whether location is valid.
+   Prints error message on stderr and returns 0 if invalid, otherwise
+   returns 1. */
+int
+location_is_valid(const location_t *location)
+{
+	/* Latitude */
+	if (location->lat < MIN_LAT || location->lat > MAX_LAT) {
+		/* TRANSLATORS: Append degree symbols if possible. */
+		fprintf(stderr,
+			_("Latitude must be between %.1f and %.1f.\n"),
+			MIN_LAT, MAX_LAT);
+		return 0;
+	}
+
+	/* Longitude */
+	if (location->lon < MIN_LON || location->lon > MAX_LON) {
+		/* TRANSLATORS: Append degree symbols if possible. */
+		fprintf(stderr,
+			_("Longitude must be between"
+			  " %.1f and %.1f.\n"), MIN_LON, MAX_LON);
+		return 0;
+	}
+
+	return 1;
+}
+
+/* Print location */
+void
+print_location(const location_t *location)
+{
+	/* TRANSLATORS: Abbreviation for `north' */
+	const char *north = _("N");
+	/* TRANSLATORS: Abbreviation for `south' */
+	const char *south = _("S");
+	/* TRANSLATORS: Abbreviation for `east' */
+	const char *east = _("E");
+	/* TRANSLATORS: Abbreviation for `west' */
+	const char *west = _("W");
+
+	/* TRANSLATORS: Append degree symbols after %f if possible.
+	   The string following each number is an abreviation for
+	   north, source, east or west (N, S, E, W). */
+	printf(_("Location: %.2f %s, %.2f %s\n"),
+	       fabs(location->lat), location->lat >= 0.f ? north : south,
+	       fabs(location->lon), location->lon >= 0.f ? east : west);
+}
+
+
+
+
+/* Determine which period we are currently in based on time offset. */
+period_t
+get_period_from_time(const transition_scheme_t *transition, int time_offset)
+{
+	if (time_offset < transition->dawn.start ||
+	    time_offset >= transition->dusk.end) {
+		return PERIOD_NIGHT;
+	} else if (time_offset >= transition->dawn.end &&
+		   time_offset < transition->dusk.start) {
+		return PERIOD_DAYTIME;
+	} else {
+		return PERIOD_TRANSITION;
+	}
+}
+
+/* Determine which period we are currently in based on solar elevation. */
+period_t
+get_period_from_elevation(
+	const transition_scheme_t *transition, double elevation)
+{
+	if (elevation < transition->low) {
+		return PERIOD_NIGHT;
+	} else if (elevation < transition->high) {
+		return PERIOD_TRANSITION;
+	} else {
+		return PERIOD_DAYTIME;
+	}
+}
+
+/* Determine how far through the transition we are based on time offset. */
+double
+get_transition_progress_from_time(
+	const transition_scheme_t *transition, int time_offset)
+{
+	if (time_offset < transition->dawn.start ||
+	    time_offset >= transition->dusk.end) {
+		return 0.0;
+	} else if (time_offset < transition->dawn.end) {
+		return (transition->dawn.start - time_offset) /
+			(double)(transition->dawn.start -
+				transition->dawn.end);
+	} else if (time_offset > transition->dusk.start) {
+		return (transition->dusk.end - time_offset) /
+			(double)(transition->dusk.end -
+				transition->dusk.start);
+	} else {
+		return 1.0;
+	}
+}
+
+/* Determine how far through the transition we are based on elevation. */
+double
+get_transition_progress_from_elevation(
+	const transition_scheme_t *transition, double elevation)
+{
+	if (elevation < transition->low) {
+		return 0.0;
+	} else if (elevation < transition->high) {
+		return (transition->low - elevation) /
+			(transition->low - transition->high);
+	} else {
+		return 1.0;
+	}
+}
+
+/* Return number of seconds since midnight from timestamp. */
+int
+get_seconds_since_midnight(double timestamp)
+{
+	time_t t = (time_t)timestamp;
+	struct tm tm;
+	localtime_r(&t, &tm);
+	return tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600;
+}
+
+
 
 
 

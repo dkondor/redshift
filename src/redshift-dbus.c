@@ -24,6 +24,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <math.h>
 
 #include <glib.h>
 #include <glib/gstdio.h>
@@ -35,6 +36,7 @@
 #include "options.h"
 #include "config-ini.h"
 #include "utils.h"
+#include "systemtime.h"
 
 options_t options;
 
@@ -75,7 +77,6 @@ options_t options;
 gamma_state_t* gamma_state;
 static const gamma_method_t *current_method = NULL;
 
-
 /* location providers */
 #include "location-manual.h"
 
@@ -86,6 +87,8 @@ static const gamma_method_t *current_method = NULL;
 #ifdef ENABLE_CORELOCATION
 # include "location-corelocation.h"
 #endif
+
+location_state_t *location_state;
 
 
 /* DBus names */
@@ -220,19 +223,31 @@ static const gchar introspection_xml[] =
 	"</node>";
 
 
-
 /* Update elevation from location and time. */
 static void
 update_elevation()
 {
 	gdouble time = g_get_real_time() / 1000000.0;
 
-	/* Check for forced location */
-	gdouble lat = latitude;
-	gdouble lon = longitude;
+	gdouble lat;
+	gdouble lon;
 	if (forced_location_cookie != 0) {
+		/* Check for forced location */
 		lat = forced_lat;
 		lon = forced_lon;
+	}
+	else {
+		/* Otherwise, try to get update from location provider */
+		location_t loc;
+		int r = provider_get_location(options.provider,
+			location_state, 500, &loc);
+		/* TODO: on error, should we abort? */
+		if(r) {
+			latitude = loc.lat;
+			longitude = loc.lon;
+		}
+		lat = latitude;
+		lon = longitude;
 	}
 
 	elevation = solar_elevation(time, lat, lon);
@@ -241,20 +256,13 @@ update_elevation()
 	g_print("Elevation: %f\n", elevation);
 }
 
-/* Update temperature from elevation */
+/* Update temperature from transition progress */
 static void
-update_temperature()
+update_temperature(double a)
 {
-	/* Calculate temperature according to elevation */
-	if (elevation < TRANSITION_LOW) {
-		temperature = temp_night;
-	} else if (elevation < TRANSITION_HIGH) {
-		float a = (TRANSITION_LOW - elevation) /
-			(TRANSITION_LOW - TRANSITION_HIGH);
-		temperature = (1.0-a)*temp_night + a*temp_day;
-	} else {
-		temperature = temp_day;
-	}
+	if (a >= 1.0) temperature = temp_day;
+	else if (a <= 0.0) temperature = temp_night;
+	else temperature = (1.0-a)*temp_night + a*temp_day;
 }
 
 
@@ -289,20 +297,33 @@ screen_update_cb(gpointer data)
 {
 	GDBusConnection *conn = G_DBUS_CONNECTION(data);
 
-	/* Update elevation from location */
-	update_elevation();
-
 	gboolean prev_inhibit = inhibited;
 	guint prev_temp = temperature;
 	period_t prev_period = period;
 
-	/* Calculate period */
-	if (elevation < TRANSITION_LOW) {
-		period = PERIOD_NIGHT;
-	} else if (elevation < TRANSITION_HIGH) {
-		period = PERIOD_TRANSITION;
-	} else {
-		period = PERIOD_DAYTIME;
+	/* Update elevation from location */
+	if (!options.scheme.use_time) {
+		update_elevation();
+
+		/* Calculate period */
+		period = get_period_from_elevation(&options.scheme, elevation);
+		double a = get_transition_progress_from_elevation(
+			&options.scheme, elevation);
+		update_temperature(a);
+	}
+	else {
+		double now;
+		int r = systemtime_get_time(&now);
+		if (r < 0) {
+			fputs(_("Unable to read system time.\n"), stderr);
+			return TRUE;
+		}
+		int time_offset = get_seconds_since_midnight(now);
+
+		period = get_period_from_time(&options.scheme, time_offset);
+		double a = get_transition_progress_from_time(
+				&options.scheme, time_offset);
+		update_temperature(a);
 	}
 
 	/* Check for inhibition */
@@ -320,9 +341,7 @@ screen_update_cb(gpointer data)
 			}
 		}
 
-		if (forced_index < 0) {
-			update_temperature();
-		} else {
+		if (forced_index >= 0) {
 			temperature = forced_temp[forced_index];
 		}
 	}
@@ -768,75 +787,6 @@ handle_set_property(GDBusConnection *conn,
 }
 
 
-/* Save position state */
-static void
-save_position_state()
-{
-	/* Probably should use STATE directory when that
-	   is standardized in the XDG spec. */
-	char *path = g_build_filename(g_get_user_data_dir(),
-				      "redshift", "position", NULL);
-	FILE *state = g_fopen(path, "w");
-	if (state == NULL) {
-		/* Try to create the directory */
-		char *path_dir = g_path_get_dirname(path);
-		gint r = g_mkdir_with_parents(path_dir, S_IRWXU);
-		if (r == 0) {
-			state = g_fopen(path, "w");
-		}
-		g_free(path_dir);
-	}
-
-	g_free(path);
-
-	if (state != NULL) {
-		g_fprintf(state, "%f\n%f\n", latitude, longitude);
-		fclose(state);
-	}
-}
-
-/* Restore saved position state */
-static void
-restore_position_state()
-{
-	/* Probably should use STATE directory when that
-	   is standardized in the XDG spec. */
-	char *path = g_build_filename(g_get_user_data_dir(),
-				      "redshift", "position", NULL);
-	FILE *state = g_fopen(path, "r");
-
-	g_free(path);
-
-	if (state != NULL) {
-		gdouble lat, lon;
-		char buffer[64];
-
-		/* Read latitude */
-		char *r = fgets(buffer, sizeof(buffer), state);
-		if (r == NULL) {
-			fclose(state);
-			return;
-		}
-
-		lat = g_ascii_strtod(buffer, NULL);
-
-		/* Read longitude */
-		r = fgets(buffer, sizeof(buffer), state);
-		if (r == NULL) {
-			fclose(state);
-			return;
-		}
-
-		lon = g_ascii_strtod(buffer, NULL);
-
-		g_print("Restored position %.2f, %.2f\n", lat, lon);
-
-		latitude = lat;
-		longitude = lon;
-	}
-}
-
-
 static const GDBusInterfaceVTable interface_vtable = {
 	handle_method_call,
 	handle_get_property,
@@ -898,9 +848,6 @@ main(int argc, char *argv[])
 	g_type_init();
 #endif
 
-	/* Restore position state from last run */
-	restore_position_state();
-
 	/* Create hash table for cookies */
 	cookies = g_hash_table_new(NULL, NULL);
 
@@ -942,58 +889,49 @@ main(int argc, char *argv[])
 		{ NULL }
 	};
 	
-	options_init(&options);
-	options_parse_args(
-		&options, argc, argv, gamma_methods, location_providers);
-
-	/* Load settings from config file. */
 	config_ini_state_t config_state;
-	int r = config_ini_init(&config_state, options.config_filepath);
-	if (r < 0) {
-		fputs("Unable to load config file.\n", stderr);
-		exit(EXIT_FAILURE);
+	int r = redshift_init_options(&options, &config_state, argc, argv,
+		gamma_methods, location_providers);
+	if(r < 0) exit(EXIT_FAILURE);
+	
+	/* Set up location provider if needed */
+	int need_location = !options.scheme.use_time;
+	if (need_location) {
+		r = providers_try_start_all(&options, &config_state,
+			&location_state, location_providers);
+		if(r < 0) exit(EXIT_FAILURE);
+	
+		fputs(_("Waiting for initial location"
+			" to become available...\n"), stderr);
+
+		/* Get initial location from provider */
+		location_t loc = { NAN, NAN };
+		r = provider_get_location(options.provider, location_state, -1, &loc);
+		if (r < 0) {
+			fputs(_("Unable to get location from provider.\n"), stderr);
+			return -1;
+		}
+
+		if (!location_is_valid(&loc)) {
+			fputs(_("Invalid location returned from provider.\n"),
+			      stderr);
+			return -1;
+		}
+
+		print_location(&loc);
+		latitude = loc.lat;
+		longitude = loc.lon;
 	}
-
-	free(options.config_filepath);
-
-	options_parse_config_file(
-		&options, &config_state, gamma_methods, location_providers);
-
-	options_set_defaults(&options);
 	
 	/* Setup gamma method */
-	if (options.method != NULL) {
-		/* Use method specified on command line or options file. */
-		r = method_try_start(
-			options.method, &gamma_state, &config_state,
-			options.method_args);
-		if (r < 0) exit(EXIT_FAILURE);
-	} else {
-		/* Try all methods, use the first that works. */
-		for (int i = 0; gamma_methods[i].name != NULL; i++) {
-			const gamma_method_t *m = &gamma_methods[i];
-			if (!m->autostart) continue;
-
-			r = method_try_start(
-				m, &gamma_state, &config_state, NULL);
-			if (r < 0) {
-				fputs(_("Trying next method...\n"), stderr);
-				continue;
-			}
-
-			/* Found method that works. */
-			printf(_("Using method `%s'.\n"), m->name);
-			options.method = m;
-			break;
-		}
-
-		/* Failure if no methods were successful at this point. */
-		if (options.method == NULL) {
-			fputs(_("No more methods to try.\n"), stderr);
-			exit(EXIT_FAILURE);
-		}
-	}
+	r = methods_try_start_all(&options, &config_state, &gamma_state,
+			gamma_methods);
+	if (r < 0) exit(EXIT_FAILURE);
 	current_method = options.method;
+	
+	/* Set day and night temperature based on the options */
+	temp_day = options.scheme.day.temperature;
+	temp_night = options.scheme.night.temperature;
 	
 
 	/* Build node info from XML */
@@ -1034,6 +972,10 @@ main(int argc, char *argv[])
 		current_method->restore(gamma_state);
 		current_method->free(gamma_state);
 	}
+	
+	/* Free up location provider */
+	if (need_location)
+		options.provider->free(location_state);
 
 	return 0;
 }

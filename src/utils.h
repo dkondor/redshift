@@ -25,25 +25,63 @@
 #include "options.h"
 #include "config-ini.h"
 
-int provider_try_start(const location_provider_t *provider,
-	location_state_t **state, config_ini_state_t *config, char *args);
-
+/* Wait for location to become available from provider.
+   Waits until timeout (milliseconds) has elapsed or forever if timeout
+   is -1. Writes location to loc. Returns -1 on error,
+   0 if timeout was reached, 1 if location became available. */
 int provider_get_location(const location_provider_t *provider,
 	location_state_t *state, int timeout, location_t *loc);
 
+/* Try to start location provider */
+int provider_try_start(const location_provider_t *provider,
+	location_state_t **state, config_ini_state_t *config, char *args);
+
+/* Try to start location provider specified in the options
+   or any available location provider if not given in the options */
 int providers_try_start_all(options_t *options, config_ini_state_t *config_state,
 	location_state_t **location_state, const location_provider_t *location_providers);
 
-int redshift_init_options(options_t* options, config_ini_state_t* config_state,
-	int argc, char** argv, const gamma_method_t* gamma_methods,
-	const location_provider_t* location_providers);
-	
 /* try starting an adjustment method */
 int method_try_start(const gamma_method_t *method,
 	gamma_state_t **state, config_ini_state_t *config, char *args);
 
+/* Try starting the gamm adjustment method specified in the options
+   or any available adjustment method if none is given */
 int methods_try_start_all(options_t *options, config_ini_state_t *config_state,
 	gamma_state_t **method_state, const gamma_method_t* gamma_methods);
+
+/* Parse options from the command line and the config file */
+int redshift_init_options(options_t* options, config_ini_state_t* config_state,
+	int argc, char** argv, const gamma_method_t* gamma_methods,
+	const location_provider_t* location_providers);
+	
+/* Check whether location is valid.
+   Prints error message on stderr and returns 0 if invalid, otherwise
+   returns 1. */
+int location_is_valid(const location_t *location);
+
+/* Print location */
+void print_location(const location_t *location);
+
+
+/* Determine which period we are currently in based on time offset. */
+period_t get_period_from_time(const transition_scheme_t *transition,
+	int time_offset);
+	
+/* Determine which period we are currently in based on solar elevation. */
+period_t get_period_from_elevation(
+	const transition_scheme_t *transition, double elevation);
+
+/* Determine how far through the transition we are based on time offset. */
+double get_transition_progress_from_time(
+	const transition_scheme_t *transition, int time_offset);
+
+/* Determine how far through the transition we are based on elevation. */
+double get_transition_progress_from_elevation(
+	const transition_scheme_t *transition, double elevation);
+
+/* Return number of seconds since midnight from timestamp. */
+int get_seconds_since_midnight(double timestamp);
 
 
 #endif
