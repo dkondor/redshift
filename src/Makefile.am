@@ -43,7 +43,8 @@ redshift_LDADD = @LIBINTL@
 
 redshift_dbus_SOURCES = \
 	redshift-dbus.c \
-	colorramp.h solar.h gamma-dummy.h
+	colorramp.h config-ini.h gamma-dummy.h \
+	location-manual.h options.h solar.h
 
 EXTRA_redshift_dbus_SOURCES = \
 	gamma-drm.h \
@@ -55,7 +56,8 @@ EXTRA_redshift_dbus_SOURCES = \
 redshift_dbus_LDADD = @LIBINTL@
 
 redshift_dbus_LDADD += \
-	colorramp.o solar.o gamma-dummy.o
+	colorramp.o config-ini.o gamma-dummy.o \
+	location-manual.o options.o solar.o
 
 redshift_dbus_CFLAGS = \
 	$(GLIB_CFLAGS) $(GDBUS_CFLAGS)

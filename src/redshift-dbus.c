@@ -31,6 +31,17 @@
 
 #include "redshift.h"
 #include "solar.h"
+#include "options.h"
+
+#ifdef ENABLE_NLS
+# include <libintl.h>
+# define _(s) gettext(s)
+# define N_(s) (s)
+#else
+# define _(s) s
+# define N_(s) s
+# define gettext(s) s
+#endif
 
 
 #ifdef ENABLE_RANDR
@@ -57,6 +68,10 @@
 /* State for gamma adjustment methods */
 gamma_state_t* gamma_state;
 static const gamma_method_t *current_method = NULL;
+
+
+/* location providers -- so far only manual is supported */
+#include "location-manual.h"
 
 
 /* DBus names */
@@ -189,6 +204,88 @@ static const gchar introspection_xml[] =
 	"  <property type='u' name='TemperatureNight' access='readwrite'/>"
 	" </interface>"
 	"</node>";
+
+
+/* try starting an adjustment method
+ * copied from redshift.c */
+static int
+method_try_start(const gamma_method_t *method,
+		 gamma_state_t **state, config_ini_state_t *config, char *args)
+{
+	int r;
+
+	r = method->init(state);
+	if (r < 0) {
+		fprintf(stderr, _("Initialization of %s failed.\n"),
+			method->name);
+		return -1;
+	}
+
+	/* Set method options from config file. */
+	config_ini_section_t *section =
+		config_ini_get_section(config, method->name);
+	if (section != NULL) {
+		config_ini_setting_t *setting = section->settings;
+		while (setting != NULL) {
+			r = method->set_option(
+				*state, setting->name, setting->value);
+			if (r < 0) {
+				method->free(*state);
+				fprintf(stderr, _("Failed to set %s"
+						  " option.\n"),
+					method->name);
+				/* TRANSLATORS: `help' must not be
+				   translated. */
+				fprintf(stderr, _("Try `-m %s:help' for more"
+						  " information.\n"),
+					method->name);
+				return -1;
+			}
+			setting = setting->next;
+		}
+	}
+
+	/* Set method options from command line. */
+	while (args != NULL) {
+		char *next_arg = strchr(args, ':');
+		if (next_arg != NULL) *(next_arg++) = '\0';
+
+		const char *key = args;
+		char *value = strchr(args, '=');
+		if (value == NULL) {
+			fprintf(stderr, _("Failed to parse option `%s'.\n"),
+				args);
+			return -1;
+		} else {
+			*(value++) = '\0';
+		}
+
+		r = method->set_option(*state, key, value);
+		if (r < 0) {
+			method->free(*state);
+			fprintf(stderr, _("Failed to set %s option.\n"),
+				method->name);
+			/* TRANSLATORS: `help' must not be translated. */
+			fprintf(stderr, _("Try -m %s:help' for more"
+					  " information.\n"), method->name);
+			return -1;
+		}
+
+		args = next_arg;
+	}
+
+	/* Start method. */
+	r = method->start(*state);
+	if (r < 0) {
+		method->free(*state);
+		fprintf(stderr, _("Failed to start adjustment method %s.\n"),
+			method->name);
+		return -1;
+	}
+
+	return 0;
+}
+
 
 
 /* Update elevation from location and time. */
@@ -876,7 +973,9 @@ main(int argc, char *argv[])
 
 	/* Create hash table for inhibitors (set) */
 	inhibitors = g_hash_table_new(NULL, NULL);
-		
+	
+	
+	
 	/* List of gamma methods. */
 	const gamma_method_t gamma_methods[] = {
 	#ifdef ENABLE_DRM
@@ -897,21 +996,67 @@ main(int argc, char *argv[])
 		dummy_gamma_method,
 		{ NULL }
 	};
+	
+	/* List of location providers. */
+	const location_provider_t location_providers[] = {
+		manual_location_provider,
+		{ NULL }
+	};
+	
+	options_t options;
+	options_init(&options);
+	options_parse_args(
+		&options, argc, argv, gamma_methods, location_providers);
 
-	/* Setup gamma method */
-	for (int i = 0; gamma_methods[i].name != NULL; i++) {
-		const gamma_method_t *m = &gamma_methods[i];
-
-		int r = m->init(&gamma_state);
-		if (r < 0) continue;
-
-		r = m->start(gamma_state);
-		if (r < 0) continue;
-
-		current_method = m;
-		g_print("Using method `%s'.\n", current_method->name);
-		break;
+	/* Load settings from config file. */
+	config_ini_state_t config_state;
+	int r = config_ini_init(&config_state, options.config_filepath);
+	if (r < 0) {
+		fputs("Unable to load config file.\n", stderr);
+		exit(EXIT_FAILURE);
 	}
+
+	free(options.config_filepath);
+
+	options_parse_config_file(
+		&options, &config_state, gamma_methods, location_providers);
+
+	options_set_defaults(&options);
+	
+	/* Setup gamma method */
+	if (options.method != NULL) {
+		/* Use method specified on command line or options file. */
+		r = method_try_start(
+			options.method, &gamma_state, &config_state,
+			options.method_args);
+		if (r < 0) exit(EXIT_FAILURE);
+	} else {
+		/* Try all methods, use the first that works. */
+		for (int i = 0; gamma_methods[i].name != NULL; i++) {
+			const gamma_method_t *m = &gamma_methods[i];
+			if (!m->autostart) continue;
+
+			r = method_try_start(
+				m, &gamma_state, &config_state, NULL);
+			if (r < 0) {
+				fputs(_("Trying next method...\n"), stderr);
+				continue;
+			}
+
+			/* Found method that works. */
+			printf(_("Using method `%s'.\n"), m->name);
+			options.method = m;
+			break;
+		}
+
+		/* Failure if no methods were successful at this point. */
+		if (options.method == NULL) {
+			fputs(_("No more methods to try.\n"), stderr);
+			exit(EXIT_FAILURE);
+		}
+	}
+	current_method = options.method;
+	
 
 	/* Build node info from XML */
 	introspection_data = g_dbus_node_info_new_for_xml(introspection_xml,
