@@ -12,6 +12,7 @@ BuildRequires: libXxf86vm-devel
 BuildRequires: libxcb-devel
 BuildRequires: glib2-devel
 BuildRequires: systemd
+BuildRequires: glib2 >= 2.26.0
 
 %description
 Redshift adjusts the color temperature of your screen according to your
@@ -70,8 +71,10 @@ gtk-update-icon-cache %{_datadir}/icons/hicolor &>/dev/null || :
 %defattr(-,root,root,-)
 %doc COPYING NEWS README README-colorramp
 %{_bindir}/redshift
+%{_libexecdir}/%{name}/redshift-dbus
 %{_mandir}/man1/*
 %{_userunitdir}/*
+%{_datadir}/dbus-1/services/dk.jonls.redshift.Redshift.service
 
 %files -n %{name}-gtk
 %defattr(-,root,root,-)

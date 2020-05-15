@@ -69,6 +69,7 @@ PKG_CHECK_MODULES([XCB_RANDR], [xcb-randr],
 	[have_xcb_randr=yes], [have_xcb_randr=no])
 
 PKG_CHECK_MODULES([GLIB], [glib-2.0 gobject-2.0], [have_glib=yes], [have_glib=no])
+PKG_CHECK_MODULES([GDBUS], [gio-2.0], [have_gio=yes], [have_gio=no])
 PKG_CHECK_MODULES([GEOCLUE2], [glib-2.0 gio-2.0 >= 2.26], [have_geoclue2=yes], [have_geoclue2=no])
 
 # macOS headers
@@ -277,6 +278,30 @@ AM_CONDITIONAL([ENABLE_CORELOCATION], [test "x$enable_corelocation" = xyes])
 AC_SUBST([CORELOCATION_CFLAGS])
 AC_SUBST([CORELOCATION_LIBS])
 
+# Check DBus service
+AC_MSG_CHECKING([whether to enable DBus service])
+AC_ARG_ENABLE([dbus], [AC_HELP_STRING([--enable-dbus],
+	[enable DBus service])],
+	[enable_dbus=$enableval],[enable_dbus=no])
+AS_IF([test "x$enable_dbus" != xno], [
+	AS_IF([test "x$have_glib" = xyes -a "x$have_gio" = xyes -a "x$have_geoclue" = xyes], [
+		AC_DEFINE([ENABLE_DBUS], 1,
+			[Define to 1 to enable DBus service])
+		AC_MSG_RESULT([yes])
+		enable_dbus=yes
+	], [
+		AC_MSG_RESULT([missing dependencies])
+		AS_IF([test "x$enable_dbus" = xyes], [
+			AC_MSG_ERROR([missing dependencies for DBus service])
+		])
+		enable_dbus=no
+	])
+], [
+	AC_MSG_RESULT([no])
+	enable_dbus=no
+])
+AM_CONDITIONAL([ENABLE_DBUS], [test "x$enable_dbus" = xyes])
+
 
 # Check for GUI status icon
 AC_MSG_CHECKING([whether to enable GUI status icon])
@@ -384,6 +409,8 @@ echo "
     Location providers:
     Geoclue2:			${enable_geoclue2}
     CoreLocation (macOS):	${enable_corelocation}
+
+    DBus service:	${enable_dbus}
 
     GUI:		${enable_gui}
     Ubuntu icons:	${enable_ubuntu}
