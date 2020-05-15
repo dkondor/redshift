@@ -21,6 +21,7 @@
 #define REDSHIFT_OPTIONS_H
 
 #include "redshift.h"
+#include "config-ini.h"
 
 typedef struct {
 	/* Path to config file */
