@@ -10,6 +10,12 @@ nodist_redshift_gtk_PYTHON = \
 redshift_gtkdir = $(pythondir)/redshift_gtk
 
 bin_SCRIPTS = redshift-gtk
+
+if ENABLE_DBUS
+bin_SCRIPTS += redshift-gtk-dbus
+redshift_gtk_PYTHON += statusicon_dbus.py
+endif
+
 endif
 
 EXTRA_DIST = defs.py.in redshift-gtk.in
@@ -23,3 +29,8 @@ defs.py: defs.py.in
 
 redshift-gtk: redshift-gtk.in
 	$(AM_V_GEN)sed -e "s|\@pythondir\@|$(pythondir)|g" $< > $@
+
+redshift-gtk-dbus: redshift-gtk-dbus.in
+	$(AM_V_GEN)sed -e "s|\@pythondir\@|$(pythondir)|g" $< > $@
+
+

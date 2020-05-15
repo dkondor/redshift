@@ -118,6 +118,7 @@ m4/lt~obsolete.m4
 /src/redshift-dbus
 /src/redshift-gtk/defs.py
 /src/redshift-gtk/redshift-gtk
+/src/redshift-gtk/redshift-gtk-dbus
 /src/redshift-gtk/__pycache__/
 /config.h
 data/dbus-1/services/dk.jonls.redshift.Redshift.service
