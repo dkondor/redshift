@@ -44,7 +44,6 @@ EXTRA_redshift_SOURCES = \
 	windows/versioninfo.rc
 
 AM_CFLAGS =
-redshift_LDADD = @LIBINTL@
 EXTRA_DIST = windows/redshift.ico
 
 
@@ -60,14 +59,14 @@ redshift_dbus_LDADD = \
 
 if ENABLE_DRM
 redshift_SOURCES += gamma-drm.c gamma-drm.h
-redshift_CFLAGS += $(DRM_CFLAGS)
+AM_CFLAGS += $(DRM_CFLAGS)
 redshift_LDADD += \
 	$(DRM_LIBS) $(DRM_CFLAGS)
 endif
 
 if ENABLE_RANDR
 redshift_SOURCES += gamma-randr.c gamma-randr.h
-redshift_CFLAGS += $(XCB_CFLAGS) $(XCB_RANDR_CFLAGS)
+AM_CFLAGS += $(XCB_CFLAGS) $(XCB_RANDR_CFLAGS)
 redshift_LDADD += \
 	$(XCB_LIBS) $(XCB_CFLAGS) \
 	$(XCB_RANDR_LIBS) $(XCB_RANDR_CFLAGS)
@@ -81,7 +80,7 @@ endif
 
 if ENABLE_VIDMODE
 redshift_SOURCES += gamma-vidmode.c gamma-vidmode.h
-redshift_CFLAGS += $(X11_CFLAGS) $(XF86VM_CFLAGS)
+AM_CFLAGS += $(X11_CFLAGS) $(XF86VM_CFLAGS)
 redshift_LDADD += \
 	$(X11_LIBS) $(X11_CFLAGS) \
 	$(XF86VM_LIBS) $(XF86VM_CFLAGS)
