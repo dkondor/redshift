@@ -174,6 +174,13 @@ static gdouble forced_lon = 0.0;
 /* Screen update timer */
 static guint screen_update_timer = 0;
 
+/* Brightness */
+#define MIN_BRIGHTNESS 0.1
+#define MAX_BRIGHTNESS 1.0
+#define BRIGHTNESS_STEP 0.1
+static gdouble brightness = 1.0;
+static gboolean brightness_changed = FALSE;
+
 
 /* DBus service definition */
 static const gchar introspection_xml[] =
@@ -212,6 +219,8 @@ static const gchar introspection_xml[] =
 	"  <method name='GetElevation'>"
 	"   <arg type='d' name='elevation' direction='out'/>"
 	"  </method>"
+	"  <method name='BrightnessUp'/>"
+	"  <method name='BrightnessDown'/>"
 	"  <property type='b' name='Inhibited' access='read'/>"
 	"  <property type='s' name='Period' access='read'/>"
 	"  <property type='u' name='Temperature' access='read'/>"
@@ -219,6 +228,7 @@ static const gchar introspection_xml[] =
 	"  <property type='d' name='CurrentLongitude' access='read'/>"
 	"  <property type='u' name='TemperatureDay' access='readwrite'/>"
 	"  <property type='u' name='TemperatureNight' access='readwrite'/>"
+	"  <property type='d' name='Brightness' access='readwrite'/>"
 	" </interface>"
 	"</node>";
 
@@ -276,7 +286,7 @@ short_transition_update_cb(gpointer data)
 	
 	if (current_method != NULL) {
 		/* temperature, gamma, brightness */
-		color_setting_t color = { temp, {1.0, 1.0, 1.0}, 1.0};
+		color_setting_t color = { temp, {1.0, 1.0, 1.0}, brightness};
 		
 		current_method->set_temperature(gamma_state, &color, 0);
 	}
@@ -316,14 +326,14 @@ screen_update_cb(gpointer data)
 		int r = systemtime_get_time(&now);
 		if (r < 0) {
 			fputs(_("Unable to read system time.\n"), stderr);
-			return TRUE;
-		}
-		int time_offset = get_seconds_since_midnight(now);
+		} else {
+			int time_offset = get_seconds_since_midnight(now);
 
-		period = get_period_from_time(&options.scheme, time_offset);
-		double a = get_transition_progress_from_time(
-				&options.scheme, time_offset);
-		update_temperature(a);
+			period = get_period_from_time(&options.scheme, time_offset);
+			double a = get_transition_progress_from_time(
+					&options.scheme, time_offset);
+			update_temperature(a);
+		}
 	}
 
 	/* Check for inhibition */
@@ -393,15 +403,16 @@ screen_update_cb(gpointer data)
 		trans_time = 0;
 
 		trans_timer = g_timeout_add(100, short_transition_update_cb, NULL);
-	} else if (temperature != temp_now) {
+	} else if (temperature != temp_now || brightness_changed) {
 		if (current_method != NULL) {
 			/* temperature, gamma, brightness */
-			color_setting_t color = { temperature, {1.0, 1.0, 1.0}, 1.0};
+			color_setting_t color = { temperature, {1.0, 1.0, 1.0}, brightness};
 			
 			current_method->set_temperature(gamma_state, &color, 0);
 		}
 		temp_now = temperature;
 	}
+	brightness_changed = FALSE;
 
 	return TRUE;
 }
@@ -438,6 +449,27 @@ emit_position_changed(GDBusConnection *conn, gdouble lat, gdouble lon)
 						    builder,
 						    NULL),
 				      &local_error);
+	g_assert_no_error(local_error);
+}
+
+
+static void
+emit_brightness_changed(GDBusConnection *conn, gdouble br2)
+{
+	GError *local_error = NULL;
+	GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
+	g_variant_builder_add(builder, "{sv}", "Brightness",
+				  g_variant_new_double(br2));
+
+	g_dbus_connection_emit_signal(conn, NULL,
+					  REDSHIFT_OBJECT_PATH,
+					  "org.freedesktop.DBus.Properties",
+					  "PropertiesChanged",
+					  g_variant_new("(sa{sv}as)",
+							REDSHIFT_INTERFACE_NAME,
+							builder,
+							NULL),
+					  &local_error);
 	g_assert_no_error(local_error);
 }
 
@@ -676,6 +708,26 @@ handle_method_call(GDBusConnection *conn,
 	} else if (g_strcmp0(method_name, "GetElevation") == 0) {
 		g_dbus_method_invocation_return_value(invocation,
 						      g_variant_new("(d)", elevation));
+	} else if (g_strcmp0(method_name, "BrightnessUp") == 0 ||
+			g_strcmp0(method_name, "BrightnessDown") == 0) {
+		gdouble br2 = brightness;
+
+		if (g_strcmp0(method_name, "BrightnessUp") == 0) {
+			br2 += BRIGHTNESS_STEP;
+			if(br2 > MAX_BRIGHTNESS) br2 = MAX_BRIGHTNESS;
+		} else {
+			br2 -= BRIGHTNESS_STEP;
+			if(br2 < MIN_BRIGHTNESS) br2 = MIN_BRIGHTNESS;
+		}
+
+		if(br2 != brightness) {
+			brightness = br2;
+			brightness_changed = TRUE;
+			screen_update_restart(conn);
+			emit_brightness_changed(conn, br2);
+		}
+
+		g_dbus_method_invocation_return_value(invocation, NULL);
 	}
 }
 
@@ -708,6 +760,8 @@ handle_get_property(GDBusConnection *conn,
 		ret = g_variant_new_uint32(temp_day);
 	} else if (g_strcmp0(prop_name, "TemperatureNight") == 0) {
 		ret = g_variant_new_uint32(temp_night);
+	} else if (g_strcmp0(prop_name, "Brightness") == 0) {
+		ret = g_variant_new_double(brightness);
 	}
 
 	return ret;
@@ -780,6 +834,19 @@ handle_set_property(GDBusConnection *conn,
 								    NULL),
 						      &local_error);
 			g_assert_no_error(local_error);
+		}
+	} else if (g_strcmp0(prop_name, "Brightness") == 0) {
+		gdouble br = g_variant_get_double(value);
+		if (br < MIN_BRIGHTNESS || br > MAX_BRIGHTNESS) {
+			g_set_error(error,
+				    G_IO_ERROR,
+				    G_IO_ERROR_FAILED,
+				    "Brightness out of bounds");
+		} else if(br != brightness) {
+			brightness = br;
+			brightness_changed = TRUE;
+			screen_update_restart(conn);
+			emit_brightness_changed(conn, br);
 		}
 	}
 
