@@ -41,59 +41,21 @@
 # include "gamma-vidmode.h"
 #endif
 
+#ifdef ENABLE_DRM
+# include "gamma-drm.h"
+#endif
+
+#ifdef ENABLE_QUARTZ
+# include "gamma-quartz.h"
+#endif
+#ifdef ENABLE_WINGDI
+# include "gamma-w32gdi.h"
+#endif
+
 #include "gamma-dummy.h"
 
-
-/* Union of state data for gamma adjustment methods */
-union {
-#ifdef ENABLE_RANDR
-	randr_state_t randr;
-#endif
-#ifdef ENABLE_VIDMODE
-	vidmode_state_t vidmode;
-#endif
-} gamma_state;
-
-
-/* Gamma adjustment method structs */
-static const gamma_method_t gamma_methods[] = {
-#ifdef ENABLE_RANDR
-	{
-		"randr", 1,
-		(gamma_method_init_func *)randr_init,
-		(gamma_method_start_func *)randr_start,
-		(gamma_method_free_func *)randr_free,
-		(gamma_method_print_help_func *)randr_print_help,
-		(gamma_method_set_option_func *)randr_set_option,
-		(gamma_method_restore_func *)randr_restore,
-		(gamma_method_set_temperature_func *)randr_set_temperature
-	},
-#endif
-#ifdef ENABLE_VIDMODE
-	{
-		"vidmode", 1,
-		(gamma_method_init_func *)vidmode_init,
-		(gamma_method_start_func *)vidmode_start,
-		(gamma_method_free_func *)vidmode_free,
-		(gamma_method_print_help_func *)vidmode_print_help,
-		(gamma_method_set_option_func *)vidmode_set_option,
-		(gamma_method_restore_func *)vidmode_restore,
-		(gamma_method_set_temperature_func *)vidmode_set_temperature
-	},
-#endif
-	{
-		"dummy", 0,
-		(gamma_method_init_func *)gamma_dummy_init,
-		(gamma_method_start_func *)gamma_dummy_start,
-		(gamma_method_free_func *)gamma_dummy_free,
-		(gamma_method_print_help_func *)gamma_dummy_print_help,
-		(gamma_method_set_option_func *)gamma_dummy_set_option,
-		(gamma_method_restore_func *)gamma_dummy_restore,
-		(gamma_method_set_temperature_func *)gamma_dummy_set_temperature
-	},
-	{ NULL }
-};
-
+/* State for gamma adjustment methods */
+gamma_state_t* gamma_state;
 static const gamma_method_t *current_method = NULL;
 
 
@@ -125,14 +87,6 @@ static const gamma_method_t *current_method = NULL;
    3.0 degrees above the horizon. */
 #define TRANSITION_LOW     SOLAR_CIVIL_TWILIGHT_ELEV
 #define TRANSITION_HIGH    3.0
-
-/* Periods of day */
-typedef enum {
-	PERIOD_NONE = 0,
-	PERIOD_DAY,
-	PERIOD_NIGHT,
-	PERIOD_TRANSITION
-} period_t;
 
 static const gchar *period_names[] = {
 	"None", "Day", "Night", "Transition"
@@ -285,11 +239,12 @@ short_transition_update_cb(gpointer data)
 	trans_time += 1;
 	gfloat a = trans_time/(gfloat)trans_length;
 	guint temp = (1.0-a)*trans_temp_start + a*temperature;
-
-	const gfloat gamma[] = {1.0, 1.0, 1.0};
+	
 	if (current_method != NULL) {
-		current_method->set_temperature(&gamma_state, temp,
-						1.0, gamma);
+		/* temperature, gamma, brightness */
+		color_setting_t color = { temp, {1.0, 1.0, 1.0}, 1.0};
+		
+		current_method->set_temperature(gamma_state, &color, 0);
 	}
 	temp_now = temp;
 
@@ -321,7 +276,7 @@ screen_update_cb(gpointer data)
 	} else if (elevation < TRANSITION_HIGH) {
 		period = PERIOD_TRANSITION;
 	} else {
-		period = PERIOD_DAY;
+		period = PERIOD_DAYTIME;
 	}
 
 	/* Check for inhibition */
@@ -394,10 +349,11 @@ screen_update_cb(gpointer data)
 
 		trans_timer = g_timeout_add(100, short_transition_update_cb, NULL);
 	} else if (temperature != temp_now) {
-		const gfloat gamma[] = {1.0, 1.0, 1.0};
 		if (current_method != NULL) {
-			current_method->set_temperature(&gamma_state, temperature,
-							1.0, gamma);
+			/* temperature, gamma, brightness */
+			color_setting_t color = { temperature, {1.0, 1.0, 1.0}, 1.0};
+			
+			current_method->set_temperature(gamma_state, &color, 0);
 		}
 		temp_now = temperature;
 	}
@@ -1044,9 +1000,9 @@ on_bus_acquired(GDBusConnection *conn,
 								  NULL);
 	g_assert(registration_id > 0);
 
-	/* Initialize Geoclue position provider */
+	/* Initialize Geoclue position provider -- not used, needs work
 	int r = init_geoclue_position(conn);
-	if (r < 0) exit(EXIT_FAILURE);
+	if (r < 0) exit(EXIT_FAILURE); */
 
 	/* Start screen update timer */
 	screen_update_restart(conn);
@@ -1095,6 +1051,27 @@ main(int argc, char *argv[])
 
 	/* Create hash table for inhibitors (set) */
 	inhibitors = g_hash_table_new(NULL, NULL);
+		
+	/* List of gamma methods. */
+	const gamma_method_t gamma_methods[] = {
+	#ifdef ENABLE_DRM
+		drm_gamma_method,
+	#endif
+	#ifdef ENABLE_RANDR
+		randr_gamma_method,
+	#endif
+	#ifdef ENABLE_VIDMODE
+		vidmode_gamma_method,
+	#endif
+	#ifdef ENABLE_QUARTZ
+		quartz_gamma_method,
+	#endif
+	#ifdef ENABLE_WINGDI
+		w32gdi_gamma_method,
+	#endif
+		dummy_gamma_method,
+		{ NULL }
+	};
 
 	/* Setup gamma method */
 	for (int i = 0; gamma_methods[i].name != NULL; i++) {
@@ -1103,7 +1080,7 @@ main(int argc, char *argv[])
 		int r = m->init(&gamma_state);
 		if (r < 0) continue;
 
-		r = m->start(&gamma_state);
+		r = m->start(gamma_state);
 		if (r < 0) continue;
 
 		current_method = m;
@@ -1148,8 +1125,8 @@ main(int argc, char *argv[])
 
 	/* Restore gamma ramps */
 	if (current_method != NULL) {
-		current_method->restore(&gamma_state);
-		current_method->free(&gamma_state);
+		current_method->restore(gamma_state);
+		current_method->free(gamma_state);
 	}
 
 	return 0;
