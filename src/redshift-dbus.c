@@ -142,10 +142,6 @@ static gdouble forced_lon = 0.0;
 /* Screen update timer */
 static guint screen_update_timer = 0;
 
-/* Geoclue proxy objects */
-static GDBusProxy *geoclue_manager = NULL;
-static GDBusProxy *geoclue_client = NULL;
-
 
 /* DBus service definition */
 static const gchar introspection_xml[] =
@@ -811,173 +807,6 @@ restore_position_state()
 }
 
 
-/* Handle position change callbacks */
-static void
-geoclue_client_signal_cb(GDBusProxy *client,
-			 gchar *sender_name,
-			 gchar *signal_name,
-			 GVariant *parameters,
-			 gpointer *data)
-{
-	GDBusConnection *conn = G_DBUS_CONNECTION(data);
-
-	/* Only handle LocationUpdated signals */
-	if (g_strcmp0(signal_name, "LocationUpdated") != 0) {
-		return;
-	}
-
-	/* Obtain location path */
-	const gchar *location_path;
-	g_variant_get_child(parameters, 1, "&o", &location_path);
-
-	/* Obtain location */
-	GError *error = NULL;
-	GDBusProxy *location =
-		g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
-					      G_DBUS_PROXY_FLAGS_NONE,
-					      NULL,
-					      "org.freedesktop.GeoClue2",
-					      location_path,
-					      "org.freedesktop.GeoClue2.Location",
-					      NULL, &error);
-	if (location == NULL) {
-		g_printerr("Unable to obtain location: %s.\n",
-			   error->message);
-		g_error_free(error);
-		return;
-	}
-
-	/* Read location properties */
-	GVariant *lat_v = g_dbus_proxy_get_cached_property(location,
-							   "Latitude");
-	gdouble lat = g_variant_get_double(lat_v);
-
-	GVariant *lon_v = g_dbus_proxy_get_cached_property(location,
-							   "Longitude");
-	gdouble lon = g_variant_get_double(lon_v);
-
-	/* Save position */
-	latitude = lat;
-	longitude = lon;
-	save_position_state();
-
-	g_print("Position from Geoclue: %.2f, %.2f\n", lat, lon);
-
-	if (forced_location_cookie == 0) {
-		emit_position_changed(conn, latitude, longitude);
-	}
-}
-
-/* Initialize Geoclue position client */
-static int
-init_geoclue_position(GDBusConnection *conn)
-{
-	/* Obtain Geoclue Manager */
-	GError *error = NULL;
-	geoclue_manager =
-		g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
-					      G_DBUS_PROXY_FLAGS_NONE,
-					      NULL,
-					      "org.freedesktop.GeoClue2",
-					      "/org/freedesktop/GeoClue2/Manager",
-					      "org.freedesktop.GeoClue2.Manager",
-					      NULL, &error);
-	if (geoclue_manager == NULL) {
-		g_printerr("Unable to obtain Geoclue Manager: %s.\n",
-			   error->message);
-		g_error_free(error);
-		return -1;
-	}
-
-	/* Obtain Geoclue Client path */
-	error = NULL;
-	GVariant *client_path_v =
-		g_dbus_proxy_call_sync(geoclue_manager,
-				       "GetClient",
-				       NULL,
-				       G_DBUS_CALL_FLAGS_NONE,
-				       -1, NULL, &error);
-	if (client_path_v == NULL) {
-		g_printerr("Unable to obtain Geoclue client path: %s.\n",
-			   error->message);
-		g_error_free(error);
-		g_object_unref(geoclue_manager);
-		return -1;
-	}
-
-	const gchar *client_path;
-	g_variant_get(client_path_v, "(&o)", &client_path);
-
-	/* Obtain GeoClue client */
-	error = NULL;
-	geoclue_client =
-		g_dbus_proxy_new_for_bus_sync(G_BUS_TYPE_SYSTEM,
-					      G_DBUS_PROXY_FLAGS_NONE,
-					      NULL,
-					      "org.freedesktop.GeoClue2",
-					      client_path,
-					      "org.freedesktop.GeoClue2.Client",
-					      NULL, &error);
-	if (geoclue_client == NULL) {
-		g_printerr("Unable to obtain Geoclue Client: %s.\n",
-			   error->message);
-		g_error_free(error);
-		g_variant_unref(client_path_v);
-		g_object_unref(geoclue_manager);
-		return -1;
-	}
-
-	g_variant_unref(client_path_v);
-
-	/* Set distance threshold */
-	error = NULL;
-	GVariant *ret_v =
-		g_dbus_proxy_call_sync(geoclue_client,
-				       "org.freedesktop.DBus.Properties.Set",
-				       g_variant_new("(ssv)",
-						     "org.freedesktop.GeoClue2.Client",
-						     "DistanceThreshold",
-						     g_variant_new("u", 10000)),
-				       G_DBUS_CALL_FLAGS_NONE,
-				       -1, NULL, &error);
-	if (ret_v == NULL) {
-		g_printerr("Unable to set distance threshold: %s.\n",
-			   error->message);
-		g_error_free(error);
-		g_object_unref(geoclue_client);
-		g_object_unref(geoclue_manager);
-		return -1;
-	}
-
-	g_variant_unref(ret_v);
-
-	/* Attach signal callback to client */
-	g_signal_connect(geoclue_client, "g-signal",
-			 G_CALLBACK(geoclue_client_signal_cb),
-			 conn);
-
-	/* Start Geoclue client */
-	error = NULL;
-	ret_v = g_dbus_proxy_call_sync(geoclue_client,
-				       "Start",
-				       NULL,
-				       G_DBUS_CALL_FLAGS_NONE,
-				       -1, NULL, &error);
-	if (ret_v == NULL) {
-		g_printerr("Unable to start Geoclue client: %s.\n",
-			   error->message);
-		g_error_free(error);
-		g_object_unref(geoclue_client);
-		g_object_unref(geoclue_manager);
-		return -1;
-	}
-
-	g_variant_unref(ret_v);
-
-	return 0;
-}
-
-
 static const GDBusInterfaceVTable interface_vtable = {
 	handle_method_call,
 	handle_get_property,
@@ -999,10 +828,6 @@ on_bus_acquired(GDBusConnection *conn,
 								  NULL, NULL,
 								  NULL);
 	g_assert(registration_id > 0);
-
-	/* Initialize Geoclue position provider -- not used, needs work
-	int r = init_geoclue_position(conn);
-	if (r < 0) exit(EXIT_FAILURE); */
 
 	/* Start screen update timer */
 	screen_update_restart(conn);
@@ -1118,8 +943,6 @@ main(int argc, char *argv[])
 
 	/* Clean up */
 	g_bus_unown_name(owner_id);
-	g_object_unref(geoclue_client);
-	g_object_unref(geoclue_manager);
 
 	g_print("Restoring gamma ramps.\n");
 
