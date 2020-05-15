@@ -24,7 +24,8 @@ redshift_SOURCES = \
 	redshift.c redshift.h \
 	signals.c signals.h \
 	solar.c solar.h \
-	systemtime.c systemtime.h
+	systemtime.c systemtime.h \
+	utils.c utils.h
 
 EXTRA_redshift_SOURCES = \
 	gamma-drm.c gamma-drm.h \
@@ -44,7 +45,8 @@ redshift_LDADD = @LIBINTL@
 redshift_dbus_SOURCES = \
 	redshift-dbus.c \
 	colorramp.h config-ini.h gamma-dummy.h \
-	location-manual.h options.h redshift.h solar.h
+	location-manual.h options.h redshift.h \
+	solar.h systemtime.h utils.h
 
 EXTRA_redshift_dbus_SOURCES = \
 	gamma-drm.h \
@@ -57,7 +59,8 @@ redshift_dbus_LDADD = @LIBINTL@
 
 redshift_dbus_LDADD += \
 	colorramp.o config-ini.o gamma-dummy.o \
-	location-manual.o options.o solar.o
+	location-manual.o options.o solar.o \
+	systemtime.o utils.o
 
 redshift_dbus_CFLAGS = \
 	$(GLIB_CFLAGS) $(GDBUS_CFLAGS)
@@ -134,10 +137,10 @@ AM_CFLAGS += \
 redshift_LDADD += \
 	$(GEOCLUE2_LIBS) $(GEOCLUE2_CFLAGS)
 
-# redshift_dbus_SOURCES += location-geoclue2.h
-# redshift_dbus_LDADD += \
-#	location-geoclue2.o
-#	$(GEOCLUE2_LIBS) $(GEOCLUE2_CFLAGS)
+redshift_dbus_SOURCES += location-geoclue2.h pipeutils.h
+redshift_dbus_LDADD += \
+	location-geoclue2.o pipeutils.o
+	$(GEOCLUE2_LIBS) $(GEOCLUE2_CFLAGS)
 endif
 
 # Build CoreLocation module as a separate convenience
@@ -153,7 +156,7 @@ liblocation_corelocation_la_OBJCFLAGS = \
 liblocation_corelocation_la_LIBADD = \
 	$(CORELOCATION_CFLAGS) $(CORELOCATION_LIBS)
 redshift_LDADD += liblocation-corelocation.la
-# redshift_dbus_LDADD += liblocation-corelocation.la
+redshift_dbus_LDADD += liblocation-corelocation.la
 endif
 
 

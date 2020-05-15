@@ -83,6 +83,9 @@ autom4te.cache
 /missing
 /stamp-h1
 
+# ignore makefiles as well (?)
+Makefile
+
 # https://www.gnu.org/software/libtool/
 
 /ltmain.sh
@@ -112,9 +115,12 @@ m4/lt~obsolete.m4
 /data/systemd/redshift-gtk.service
 /m4
 /src/redshift
+/src/redshift-dbus
 /src/redshift-gtk/defs.py
 /src/redshift-gtk/redshift-gtk
 /src/redshift-gtk/__pycache__/
+/config.h
+data/dbus-1/services/dk.jonls.redshift.Redshift.service
 
 # gettext
 /po/POTFILES

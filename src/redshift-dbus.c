@@ -15,6 +15,7 @@
    along with Redshift.  If not, see <http://www.gnu.org/licenses/>.
 
    Copyright (c) 2013  Jon Lund Steffensen <jonlst@gmail.com>
+   Copyright (c) 2020 Daniel Kondor <kondor.dani@gmail.com>
 */
 
 #ifdef HAVE_CONFIG_H
@@ -32,6 +33,11 @@
 #include "redshift.h"
 #include "solar.h"
 #include "options.h"
+#include "config-ini.h"
+#include "utils.h"
+
+options_t options;
+
 
 #ifdef ENABLE_NLS
 # include <libintl.h>
@@ -70,8 +76,16 @@ gamma_state_t* gamma_state;
 static const gamma_method_t *current_method = NULL;
 
 
-/* location providers -- so far only manual is supported */
+/* location providers */
 #include "location-manual.h"
+
+#ifdef ENABLE_GEOCLUE2
+# include "location-geoclue2.h"
+#endif
+
+#ifdef ENABLE_CORELOCATION
+# include "location-corelocation.h"
+#endif
 
 
 /* DBus names */
@@ -204,87 +218,6 @@ static const gchar introspection_xml[] =
 	"  <property type='u' name='TemperatureNight' access='readwrite'/>"
 	" </interface>"
 	"</node>";
-
-
-/* try starting an adjustment method
- * copied from redshift.c */
-static int
-method_try_start(const gamma_method_t *method,
-		 gamma_state_t **state, config_ini_state_t *config, char *args)
-{
-	int r;
-
-	r = method->init(state);
-	if (r < 0) {
-		fprintf(stderr, _("Initialization of %s failed.\n"),
-			method->name);
-		return -1;
-	}
-
-	/* Set method options from config file. */
-	config_ini_section_t *section =
-		config_ini_get_section(config, method->name);
-	if (section != NULL) {
-		config_ini_setting_t *setting = section->settings;
-		while (setting != NULL) {
-			r = method->set_option(
-				*state, setting->name, setting->value);
-			if (r < 0) {
-				method->free(*state);
-				fprintf(stderr, _("Failed to set %s"
-						  " option.\n"),
-					method->name);
-				/* TRANSLATORS: `help' must not be
-				   translated. */
-				fprintf(stderr, _("Try `-m %s:help' for more"
-						  " information.\n"),
-					method->name);
-				return -1;
-			}
-			setting = setting->next;
-		}
-	}
-
-	/* Set method options from command line. */
-	while (args != NULL) {
-		char *next_arg = strchr(args, ':');
-		if (next_arg != NULL) *(next_arg++) = '\0';
-
-		const char *key = args;
-		char *value = strchr(args, '=');
-		if (value == NULL) {
-			fprintf(stderr, _("Failed to parse option `%s'.\n"),
-				args);
-			return -1;
-		} else {
-			*(value++) = '\0';
-		}
-
-		r = method->set_option(*state, key, value);
-		if (r < 0) {
-			method->free(*state);
-			fprintf(stderr, _("Failed to set %s option.\n"),
-				method->name);
-			/* TRANSLATORS: `help' must not be translated. */
-			fprintf(stderr, _("Try -m %s:help' for more"
-					  " information.\n"), method->name);
-			return -1;
-		}
-
-		args = next_arg;
-	}
-
-	/* Start method. */
-	r = method->start(*state);
-	if (r < 0) {
-		method->free(*state);
-		fprintf(stderr, _("Failed to start adjustment method %s.\n"),
-			method->name);
-		return -1;
-	}
-
-	return 0;
-}
 
 
 
@@ -999,11 +932,16 @@ main(int argc, char *argv[])
 	
 	/* List of location providers. */
 	const location_provider_t location_providers[] = {
+#ifdef ENABLE_GEOCLUE2
+		geoclue2_location_provider,
+#endif
+#ifdef ENABLE_CORELOCATION
+		corelocation_location_provider,
+#endif
 		manual_location_provider,
 		{ NULL }
 	};
 	
-	options_t options;
 	options_init(&options);
 	options_parse_args(
 		&options, argc, argv, gamma_methods, location_providers);

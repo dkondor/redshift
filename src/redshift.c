@@ -65,6 +65,7 @@ int poll(struct pollfd *fds, int nfds, int timeout) { abort(); return -1; }
 #include "hooks.h"
 #include "signals.h"
 #include "options.h"
+#include "utils.h"
 
 /* pause() is not defined on windows platform but is not needed either.
    Use a noop macro instead. */
@@ -313,177 +314,6 @@ color_setting_reset(color_setting_t *color)
 }
 
 
-static int
-provider_try_start(const location_provider_t *provider,
-		   location_state_t **state, config_ini_state_t *config,
-		   char *args)
-{
-	int r;
-
-	r = provider->init(state);
-	if (r < 0) {
-		fprintf(stderr, _("Initialization of %s failed.\n"),
-			provider->name);
-		return -1;
-	}
-
-	/* Set provider options from config file. */
-	config_ini_section_t *section =
-		config_ini_get_section(config, provider->name);
-	if (section != NULL) {
-		config_ini_setting_t *setting = section->settings;
-		while (setting != NULL) {
-			r = provider->set_option(*state, setting->name,
-						 setting->value);
-			if (r < 0) {
-				provider->free(*state);
-				fprintf(stderr, _("Failed to set %s"
-						  " option.\n"),
-					provider->name);
-				/* TRANSLATORS: `help' must not be
-				   translated. */
-				fprintf(stderr, _("Try `-l %s:help' for more"
-						  " information.\n"),
-					provider->name);
-				return -1;
-			}
-			setting = setting->next;
-		}
-	}
-
-	/* Set provider options from command line. */
-	const char *manual_keys[] = { "lat", "lon" };
-	int i = 0;
-	while (args != NULL) {
-		char *next_arg = strchr(args, ':');
-		if (next_arg != NULL) *(next_arg++) = '\0';
-
-		const char *key = args;
-		char *value = strchr(args, '=');
-		if (value == NULL) {
-			/* The options for the "manual" method can be set
-			   without keys on the command line for convencience
-			   and for backwards compatability. We add the proper
-			   keys here before calling set_option(). */
-			if (strcmp(provider->name, "manual") == 0 &&
-			    i < sizeof(manual_keys)/sizeof(manual_keys[0])) {
-				key = manual_keys[i];
-				value = args;
-			} else {
-				fprintf(stderr, _("Failed to parse option `%s'.\n"),
-					args);
-				return -1;
-			}
-		} else {
-			*(value++) = '\0';
-		}
-
-		r = provider->set_option(*state, key, value);
-		if (r < 0) {
-			provider->free(*state);
-			fprintf(stderr, _("Failed to set %s option.\n"),
-				provider->name);
-			/* TRANSLATORS: `help' must not be translated. */
-			fprintf(stderr, _("Try `-l %s:help' for more"
-					  " information.\n"), provider->name);
-			return -1;
-		}
-
-		args = next_arg;
-		i += 1;
-	}
-
-	/* Start provider. */
-	r = provider->start(*state);
-	if (r < 0) {
-		provider->free(*state);
-		fprintf(stderr, _("Failed to start provider %s.\n"),
-			provider->name);
-		return -1;
-	}
-
-	return 0;
-}
-
-static int
-method_try_start(const gamma_method_t *method,
-		 gamma_state_t **state, config_ini_state_t *config, char *args)
-{
-	int r;
-
-	r = method->init(state);
-	if (r < 0) {
-		fprintf(stderr, _("Initialization of %s failed.\n"),
-			method->name);
-		return -1;
-	}
-
-	/* Set method options from config file. */
-	config_ini_section_t *section =
-		config_ini_get_section(config, method->name);
-	if (section != NULL) {
-		config_ini_setting_t *setting = section->settings;
-		while (setting != NULL) {
-			r = method->set_option(
-				*state, setting->name, setting->value);
-			if (r < 0) {
-				method->free(*state);
-				fprintf(stderr, _("Failed to set %s"
-						  " option.\n"),
-					method->name);
-				/* TRANSLATORS: `help' must not be
-				   translated. */
-				fprintf(stderr, _("Try `-m %s:help' for more"
-						  " information.\n"),
-					method->name);
-				return -1;
-			}
-			setting = setting->next;
-		}
-	}
-
-	/* Set method options from command line. */
-	while (args != NULL) {
-		char *next_arg = strchr(args, ':');
-		if (next_arg != NULL) *(next_arg++) = '\0';
-
-		const char *key = args;
-		char *value = strchr(args, '=');
-		if (value == NULL) {
-			fprintf(stderr, _("Failed to parse option `%s'.\n"),
-				args);
-			return -1;
-		} else {
-			*(value++) = '\0';
-		}
-
-		r = method->set_option(*state, key, value);
-		if (r < 0) {
-			method->free(*state);
-			fprintf(stderr, _("Failed to set %s option.\n"),
-				method->name);
-			/* TRANSLATORS: `help' must not be translated. */
-			fprintf(stderr, _("Try -m %s:help' for more"
-					  " information.\n"), method->name);
-			return -1;
-		}
-
-		args = next_arg;
-	}
-
-	/* Start method. */
-	r = method->start(*state);
-	if (r < 0) {
-		method->free(*state);
-		fprintf(stderr, _("Failed to start adjustment method %s.\n"),
-			method->name);
-		return -1;
-	}
-
-	return 0;
-}
-
-
 /* Check whether gamma is within allowed levels. */
 static int
 gamma_is_valid(const float gamma[3])
@@ -518,64 +348,6 @@ location_is_valid(const location_t *location)
 			_("Longitude must be between"
 			  " %.1f and %.1f.\n"), MIN_LON, MAX_LON);
 		return 0;
-	}
-
-	return 1;
-}
-
-/* Wait for location to become available from provider.
-   Waits until timeout (milliseconds) has elapsed or forever if timeout
-   is -1. Writes location to loc. Returns -1 on error,
-   0 if timeout was reached, 1 if location became available. */
-static int
-provider_get_location(
-	const location_provider_t *provider, location_state_t *state,
-	int timeout, location_t *loc)
-{
-	int available = 0;
-	struct pollfd pollfds[1];
-	while (!available) {
-		int loc_fd = provider->get_fd(state);
-		if (loc_fd >= 0) {
-			/* Provider is dynamic. */
-			/* TODO: This should use a monotonic time source. */
-			double now;
-			int r = systemtime_get_time(&now);
-			if (r < 0) {
-				fputs(_("Unable to read system time.\n"),
-				      stderr);
-				return -1;
-			}
-
-			/* Poll on file descriptor until ready. */
-			pollfds[0].fd = loc_fd;
-			pollfds[0].events = POLLIN;
-			r = poll(pollfds, 1, timeout);
-			if (r < 0) {
-				perror("poll");
-				return -1;
-			} else if (r == 0) {
-				return 0;
-			}
-
-			double later;
-			r = systemtime_get_time(&later);
-			if (r < 0) {
-				fputs(_("Unable to read system time.\n"),
-				      stderr);
-				return -1;
-			}
-
-			/* Adjust timeout by elapsed time */
-			if (timeout >= 0) {
-				timeout -= (later - now) * 1000;
-				timeout = timeout < 0 ? 0 : timeout;
-			}
-		}
-
-
-		int r = provider->handle(state, loc, &available);
-		if (r < 0) return -1;
 	}
 
 	return 1;
@@ -940,47 +712,11 @@ main(int argc, char *argv[])
 	setvbuf(stderr, NULL, _IOLBF, 0);
 
 	options_t options;
-	options_init(&options);
-	options_parse_args(
-		&options, argc, argv, gamma_methods, location_providers);
-
-	/* Load settings from config file. */
 	config_ini_state_t config_state;
-	r = config_ini_init(&config_state, options.config_filepath);
-	if (r < 0) {
-		fputs("Unable to load config file.\n", stderr);
-		exit(EXIT_FAILURE);
-	}
-
-	free(options.config_filepath);
-
-	options_parse_config_file(
-		&options, &config_state, gamma_methods, location_providers);
-
-	options_set_defaults(&options);
-
-	if (options.scheme.dawn.start >= 0 || options.scheme.dawn.end >= 0 ||
-	    options.scheme.dusk.start >= 0 || options.scheme.dusk.end >= 0) {
-		if (options.scheme.dawn.start < 0 ||
-		    options.scheme.dawn.end < 0 ||
-		    options.scheme.dusk.start < 0 ||
-		    options.scheme.dusk.end < 0) {
-			fputs(_("Partitial time-configuration not"
-				" supported!\n"), stderr);
-			exit(EXIT_FAILURE);
-		}
-
-		if (options.scheme.dawn.start > options.scheme.dawn.end ||
-		    options.scheme.dawn.end > options.scheme.dusk.start ||
-		    options.scheme.dusk.start > options.scheme.dusk.end) {
-			fputs(_("Invalid dawn/dusk time configuration!\n"),
-			      stderr);
-			exit(EXIT_FAILURE);
-		}
-
-		options.scheme.use_time = 1;
-	}
-
+	r = redshift_init_options(&options, &config_state, argc, argv,
+		gamma_methods, location_providers);
+	if(r < 0) exit(EXIT_FAILURE);
+	
 	/* Initialize location provider if needed. If provider is NULL
 	   try all providers until one that works is found. */
 	location_state_t *location_state;
@@ -991,57 +727,9 @@ main(int argc, char *argv[])
 		options.mode != PROGRAM_MODE_MANUAL &&
 		!options.scheme.use_time;
 	if (need_location) {
-		if (options.provider != NULL) {
-			/* Use provider specified on command line. */
-			r = provider_try_start(
-				options.provider, &location_state,
-				&config_state, options.provider_args);
-			if (r < 0) exit(EXIT_FAILURE);
-		} else {
-			/* Try all providers, use the first that works. */
-			for (int i = 0;
-			     location_providers[i].name != NULL; i++) {
-				const location_provider_t *p =
-					&location_providers[i];
-				fprintf(stderr,
-					_("Trying location provider `%s'...\n"),
-					p->name);
-				r = provider_try_start(p, &location_state,
-						       &config_state, NULL);
-				if (r < 0) {
-					fputs(_("Trying next provider...\n"),
-					      stderr);
-					continue;
-				}
-
-				/* Found provider that works. */
-				printf(_("Using provider `%s'.\n"), p->name);
-				options.provider = p;
-				break;
-			}
-
-			/* Failure if no providers were successful at this
-			   point. */
-			if (options.provider == NULL) {
-				fputs(_("No more location providers"
-					" to try.\n"), stderr);
-				exit(EXIT_FAILURE);
-			}
-		}
-
-		/* Solar elevations */
-		if (options.scheme.high < options.scheme.low) {
-			fprintf(stderr,
-				_("High transition elevation cannot be lower than"
-				  " the low transition elevation.\n"));
-			exit(EXIT_FAILURE);
-		}
-
-		if (options.verbose) {
-			/* TRANSLATORS: Append degree symbols if possible. */
-			printf(_("Solar elevations: day above %.1f, night below %.1f\n"),
-			       options.scheme.high, options.scheme.low);
-		}
+		r = providers_try_start_all(&options, &config_state,
+			&location_state, location_providers);
+		if(r < 0) exit(EXIT_FAILURE);
 	}
 
 	if (options.mode != PROGRAM_MODE_RESET &&
@@ -1122,37 +810,9 @@ main(int argc, char *argv[])
 
 	/* Gamma adjustment not needed for print mode */
 	if (options.mode != PROGRAM_MODE_PRINT) {
-		if (options.method != NULL) {
-			/* Use method specified on command line. */
-			r = method_try_start(
-				options.method, &method_state, &config_state,
-				options.method_args);
-			if (r < 0) exit(EXIT_FAILURE);
-		} else {
-			/* Try all methods, use the first that works. */
-			for (int i = 0; gamma_methods[i].name != NULL; i++) {
-				const gamma_method_t *m = &gamma_methods[i];
-				if (!m->autostart) continue;
-
-				r = method_try_start(
-					m, &method_state, &config_state, NULL);
-				if (r < 0) {
-					fputs(_("Trying next method...\n"), stderr);
-					continue;
-				}
-
-				/* Found method that works. */
-				printf(_("Using method `%s'.\n"), m->name);
-				options.method = m;
-				break;
-			}
-
-			/* Failure if no methods were successful at this point. */
-			if (options.method == NULL) {
-				fputs(_("No more methods to try.\n"), stderr);
-				exit(EXIT_FAILURE);
-			}
-		}
+		r = methods_try_start_all(&options, &config_state, &method_state,
+			gamma_methods);
+		if (r < 0) exit(EXIT_FAILURE);
 	}
 
 	config_ini_free(&config_state);
