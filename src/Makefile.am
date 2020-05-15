@@ -44,7 +44,7 @@ redshift_LDADD = @LIBINTL@
 redshift_dbus_SOURCES = \
 	redshift-dbus.c \
 	colorramp.h config-ini.h gamma-dummy.h \
-	location-manual.h options.h solar.h
+	location-manual.h options.h redshift.h solar.h
 
 EXTRA_redshift_dbus_SOURCES = \
 	gamma-drm.h \
