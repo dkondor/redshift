@@ -26,12 +26,6 @@ redshift_SOURCES = \
 	solar.c solar.h \
 	systemtime.c systemtime.h
 
-redshift_dbus_SOURCES = \
-	redshift-dbus.c \
-	colorramp.c colorramp.h \
-	solar.c solar.h \
-	gamma-dummy.c gamma-dummy.h
-
 EXTRA_redshift_SOURCES = \
 	gamma-drm.c gamma-drm.h \
 	gamma-randr.c gamma-randr.h \
@@ -47,18 +41,37 @@ AM_CFLAGS =
 EXTRA_DIST = windows/redshift.ico
 redshift_LDADD = @LIBINTL@
 
+redshift_dbus_SOURCES = \
+	redshift-dbus.c \
+	colorramp.h solar.h gamma-dummy.h
+
+EXTRA_redshift_dbus_SOURCES = \
+	gamma-drm.h \
+	gamma-randr.h \
+	gamma-vidmode.h \
+	gamma-quartz.h \
+	gamma-w32gdi.h
+
+redshift_dbus_LDADD = @LIBINTL@
+
+redshift_dbus_LDADD += \
+	colorramp.o solar.o gamma-dummy.o
+
 redshift_dbus_CFLAGS = \
-	$(GLIB_CFLAGS) $(GDBUS_CFLAGS) \
-	$(GEOCLUE_CFLAGS)
-redshift_dbus_LDADD = \
-	$(GLIB_LIBS) $(GDBUS_LIBS) \
-	$(GEOCLUE_LIBS)
+	$(GLIB_CFLAGS) $(GDBUS_CFLAGS)
+redshift_dbus_LDADD += \
+	$(GLIB_LIBS) $(GDBUS_LIBS)
 
 
 if ENABLE_DRM
 redshift_SOURCES += gamma-drm.c gamma-drm.h
 AM_CFLAGS += $(DRM_CFLAGS)
 redshift_LDADD += \
+	$(DRM_LIBS) $(DRM_CFLAGS)
+
+redshift_dbus_SOURCES += gamma-drm.h
+redshift_dbus_LDADD += \
+	gamma-drm.o \
 	$(DRM_LIBS) $(DRM_CFLAGS)
 endif
 
@@ -69,9 +82,9 @@ redshift_LDADD += \
 	$(XCB_LIBS) $(XCB_CFLAGS) \
 	$(XCB_RANDR_LIBS) $(XCB_RANDR_CFLAGS)
 
-redshift_dbus_SOURCES += gamma-randr.c gamma-randr.h
-redshift_dbus_CFLAGS += $(XCB_CFLAGS) $(XCB_RANDR_CFLAGS)
+redshift_dbus_SOURCES += gamma-randr.h
 redshift_dbus_LDADD += \
+	gamma-randr.o \
 	$(XCB_LIBS) $(XCB_CFLAGS) \
 	$(XCB_RANDR_LIBS) $(XCB_RANDR_CFLAGS)
 endif
@@ -83,9 +96,9 @@ redshift_LDADD += \
 	$(X11_LIBS) $(X11_CFLAGS) \
 	$(XF86VM_LIBS) $(XF86VM_CFLAGS)
 
-redshift_dbus_SOURCES += gamma-vidmode.c gamma-vidmode.h
-redshift_dbus_CFLAGS += $(X11_CFLAGS) $(XF86VM_CFLAGS)
+redshift_dbus_SOURCES += gamma-vidmode.h
 redshift_dbus_LDADD += \
+	gamma-vidmode.o \
 	$(X11_LIBS) $(X11_CFLAGS) \
 	$(XF86VM_LIBS) $(XF86VM_CFLAGS)
 endif
@@ -95,11 +108,20 @@ redshift_SOURCES += gamma-quartz.c gamma-quartz.h
 AM_CFLAGS += $(QUARTZ_CFLAGS)
 redshift_LDADD += \
 	$(QUARTZ_LIBS) $(QUARTZ_CFLAGS)
+	
+redshift_dbus_SOURCES += gamma-quartz.h
+redshift_dbus_LDADD += \
+	gamma-quartz.o
+	$(QUARTZ_LIBS) $(QUARTZ_CFLAGS)
 endif
 
 if ENABLE_WINGDI
 redshift_SOURCES += gamma-w32gdi.c gamma-w32gdi.h
 redshift_LDADD += -lgdi32
+	
+redshift_dbus_SOURCES += gamma-w32gdi.h
+redshift_dbus_LDADD += gamma-w32gdi.o \
+	-lgdi32
 endif
 
 
@@ -109,6 +131,11 @@ AM_CFLAGS += \
 	$(GEOCLUE2_CFLAGS)
 redshift_LDADD += \
 	$(GEOCLUE2_LIBS) $(GEOCLUE2_CFLAGS)
+
+# redshift_dbus_SOURCES += location-geoclue2.h
+# redshift_dbus_LDADD += \
+#	location-geoclue2.o
+#	$(GEOCLUE2_LIBS) $(GEOCLUE2_CFLAGS)
 endif
 
 # Build CoreLocation module as a separate convenience
@@ -124,6 +151,7 @@ liblocation_corelocation_la_OBJCFLAGS = \
 liblocation_corelocation_la_LIBADD = \
 	$(CORELOCATION_CFLAGS) $(CORELOCATION_LIBS)
 redshift_LDADD += liblocation-corelocation.la
+# redshift_dbus_LDADD += liblocation-corelocation.la
 endif
 
 
