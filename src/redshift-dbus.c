@@ -268,16 +268,40 @@ static gboolean
 short_transition_update_cb(gpointer data)
 {
 	trans_time += 1;
-	gfloat a = trans_time/(gfloat)trans_length;
-	interpolate_color_settings(&color_setting_trans_start,
-		&color_setting, a, &color_setting_now);
+	if (trans_time <= trans_length) {
+		gfloat a = trans_time/(gfloat)trans_length;
+		interpolate_color_settings(&color_setting_trans_start,
+			&color_setting, a, &color_setting_now);
+	}
+	
+	/* brightness changes have a constant rate of 2% / 100ms */
+	double brightness_change = trans_time * 0.02;
+	if (color_setting.brightness >
+		color_setting_trans_start.brightness) {
+			double tmp_brightness = 
+				color_setting_trans_start.brightness +
+					brightness_change;
+			color_setting_now.brightness =
+				(tmp_brightness > color_setting.brightness) ? 
+				color_setting.brightness : tmp_brightness;
+		}
+	else if (color_setting.brightness <
+		color_setting_trans_start.brightness) {
+			double tmp_brightness = 
+				color_setting_trans_start.brightness -
+					brightness_change;
+			color_setting_now.brightness =
+				(tmp_brightness < color_setting.brightness) ? 
+				color_setting.brightness : tmp_brightness;
+		}
 	
 	if (current_method != NULL) {
 		current_method->set_temperature(gamma_state,
 			&color_setting_now, 0);
 	}
 	
-	if (trans_time >= trans_length) {
+	if (trans_time >= trans_length &&
+			color_setting_now.brightness == color_setting.brightness) {
 		trans_time = 0;
 		trans_length = 0;
 		return FALSE;
