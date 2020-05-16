@@ -297,7 +297,7 @@ short_transition_update_cb(gpointer data)
 	
 	if (current_method != NULL) {
 		current_method->set_temperature(gamma_state,
-			&color_setting_now, 0);
+			&color_setting_now, options.preserve_gamma);
 	}
 	
 	if (trans_time >= trans_length &&
@@ -429,7 +429,8 @@ screen_update_cb(gpointer data)
 			g_source_remove(trans_timer);
 		}
 		if (current_method != NULL) {
-			current_method->set_temperature(gamma_state, &color_setting, 0);
+			current_method->set_temperature(gamma_state,
+				&color_setting, options.preserve_gamma);
 		}
 		color_setting_now = color_setting;
 	}
@@ -990,6 +991,11 @@ main(int argc, char *argv[])
 		gamma_methods, location_providers);
 	if(r < 0) exit(EXIT_FAILURE);
 	
+	if (options.mode != PROGRAM_MODE_CONTINUAL) {
+		fputs(_("Unsupported option for program mode!\n"), stderr);
+		exit(EXIT_FAILURE);
+	}
+
 	/* Set up location provider if needed */
 	int need_location = !options.scheme.use_time;
 	if (need_location) {
