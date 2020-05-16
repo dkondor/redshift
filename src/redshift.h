@@ -27,6 +27,13 @@
 /* The color temperature when no adjustment is applied. */
 #define NEUTRAL_TEMP  6500
 
+/* Bounds for parameters. */
+#define MIN_TEMP   1000
+#define MAX_TEMP  25000
+#define MIN_BRIGHTNESS  0.1
+#define MAX_BRIGHTNESS  1.0
+#define MIN_GAMMA   0.1
+#define MAX_GAMMA  10.0
 
 /* Location */
 typedef struct {

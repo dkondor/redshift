@@ -389,6 +389,20 @@ provider_get_location(
 
 
 
+
+/* Check whether gamma is within allowed levels. */
+static int
+gamma_is_valid(const float gamma[3])
+{
+	return !(gamma[0] < MIN_GAMMA ||
+		 gamma[0] > MAX_GAMMA ||
+		 gamma[1] < MIN_GAMMA ||
+		 gamma[1] > MAX_GAMMA ||
+		 gamma[2] < MIN_GAMMA ||
+		 gamma[2] > MAX_GAMMA);
+}
+
+
 int 
 redshift_init_options(options_t* options, config_ini_state_t* config_state,
 		int argc, char** argv, const gamma_method_t* gamma_methods,
@@ -433,6 +447,46 @@ redshift_init_options(options_t* options, config_ini_state_t* config_state,
 
 		options->scheme.use_time = 1;
 	}
+
+	/* Brightness */
+	if (options->scheme.day.brightness < MIN_BRIGHTNESS ||
+	    options->scheme.day.brightness > MAX_BRIGHTNESS ||
+	    options->scheme.night.brightness < MIN_BRIGHTNESS ||
+	    options->scheme.night.brightness > MAX_BRIGHTNESS) {
+		fprintf(stderr,
+			_("Brightness values must be between %.1f and %.1f.\n"),
+			MIN_BRIGHTNESS, MAX_BRIGHTNESS);
+		exit(EXIT_FAILURE);
+	}
+
+	if (options->verbose) {
+		printf(_("Brightness: %.2f:%.2f\n"),
+		       options->scheme.day.brightness,
+		       options->scheme.night.brightness);
+	}
+
+	/* Gamma */
+	if (!gamma_is_valid(options->scheme.day.gamma) ||
+	    !gamma_is_valid(options->scheme.night.gamma)) {
+		fprintf(stderr,
+			_("Gamma value must be between %.1f and %.1f.\n"),
+			MIN_GAMMA, MAX_GAMMA);
+		exit(EXIT_FAILURE);
+	}
+
+	if (options->verbose) {
+		/* TRANSLATORS: The string in parenthesis is either
+		   Daytime or Night (translated). */
+		printf(_("Gamma (%s): %.3f, %.3f, %.3f\n"),
+		       _("Daytime"), options->scheme.day.gamma[0],
+		       options->scheme.day.gamma[1],
+		       options->scheme.day.gamma[2]);
+		printf(_("Gamma (%s): %.3f, %.3f, %.3f\n"),
+		       _("Night"), options->scheme.night.gamma[0],
+		       options->scheme.night.gamma[1],
+		       options->scheme.night.gamma[2]);
+	}
+
 	return 0;
 }
 
@@ -563,7 +617,80 @@ get_seconds_since_midnight(double timestamp)
 	return tm.tm_sec + tm.tm_min * 60 + tm.tm_hour * 3600;
 }
 
+#undef CLAMP
+#define CLAMP(lo,mid,up)  (((lo) > (mid)) ? (lo) : (((mid) < (up)) ? (mid) : (up)))
 
+/* Interpolate color setting structs given alpha. */
+void
+interpolate_color_settings(
+	const color_setting_t *first,
+	const color_setting_t *second,
+	double alpha,
+	color_setting_t *result)
+{
+	alpha = CLAMP(0.0, alpha, 1.0);
+
+	result->temperature = (1.0-alpha)*first->temperature +
+		alpha*second->temperature;
+	result->brightness = (1.0-alpha)*first->brightness +
+		alpha*second->brightness;
+	for (int i = 0; i < 3; i++) {
+		result->gamma[i] = (1.0-alpha)*first->gamma[i] +
+			alpha*second->gamma[i];
+	}
+}
+
+/* Interpolate color setting structs transition scheme. */
+void
+interpolate_transition_scheme(
+	const transition_scheme_t *transition,
+	double alpha,
+	color_setting_t *result)
+{
+	const color_setting_t *day = &transition->day;
+	const color_setting_t *night = &transition->night;
+
+	alpha = CLAMP(0.0, alpha, 1.0);
+	interpolate_color_settings(night, day, alpha, result);
+}
+
+/* Return 1 if color settings have major differences, otherwise 0.
+   Used to determine if a fade should be applied in continual mode. */
+int
+color_setting_diff_is_major(
+	const color_setting_t *first,
+	const color_setting_t *second)
+{
+	return (abs(first->temperature - second->temperature) > 25 ||
+		fabsf(first->brightness - second->brightness) > 0.1 ||
+		fabsf(first->gamma[0] - second->gamma[0]) > 0.1 ||
+		fabsf(first->gamma[1] - second->gamma[1]) > 0.1 ||
+		fabsf(first->gamma[2] - second->gamma[2]) > 0.1);
+}
+
+int
+color_setting_diff(
+	const color_setting_t *first,
+	const color_setting_t *second)
+{
+	return ( (first->temperature != second->temperature) ||
+		(first->brightness != second->brightness) ||
+		(first->gamma[0] != second->gamma[0]) ||
+		(first->gamma[1] != second->gamma[1]) ||
+		(first->gamma[2] != second->gamma[2]) );
+}
+
+
+/* Reset color setting to default values. */
+void
+color_setting_reset(color_setting_t *color)
+{
+	color->temperature = NEUTRAL_TEMP;
+	color->gamma[0] = 1.0;
+	color->gamma[1] = 1.0;
+	color->gamma[2] = 1.0;
+	color->brightness = 1.0;
+}
 
 
 

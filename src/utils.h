@@ -91,6 +91,33 @@ double get_transition_progress_from_elevation(
 /* Return number of seconds since midnight from timestamp. */
 int get_seconds_since_midnight(double timestamp);
 
+/* Interpolate color setting structs given alpha. */
+void interpolate_color_settings(
+	const color_setting_t *first,
+	const color_setting_t *second,
+	double alpha,
+	color_setting_t *result);
+
+/* Interpolate color setting structs transition scheme. */
+void interpolate_transition_scheme(
+	const transition_scheme_t *transition,
+	double alpha,
+	color_setting_t *result);
+
+/* Return 1 if color settings have major differences, otherwise 0.
+   Used to determine if a fade should be applied in continual mode. */
+int color_setting_diff_is_major(
+	const color_setting_t *first,
+	const color_setting_t *second);
+
+/* Return 1 if color settings differ at all, 0 otherwise.
+   Used to determine if there should be an update. */
+int color_setting_diff(
+	const color_setting_t *first,
+	const color_setting_t *second);
+
+/* Reset color setting to default values. */
+void color_setting_reset(color_setting_t *color);
 
 #endif
 

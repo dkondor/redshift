@@ -106,17 +106,6 @@ int poll(struct pollfd *fds, int nfds, int timeout) { abort(); return -1; }
 # include "location-corelocation.h"
 #endif
 
-#undef CLAMP
-#define CLAMP(lo,mid,up)  (((lo) > (mid)) ? (lo) : (((mid) < (up)) ? (mid) : (up)))
-
-
-/* Bounds for parameters. */
-#define MIN_TEMP   1000
-#define MAX_TEMP  25000
-#define MIN_BRIGHTNESS  0.1
-#define MAX_BRIGHTNESS  1.0
-#define MIN_GAMMA   0.1
-#define MAX_GAMMA  10.0
 
 /* Duration of sleep between screen updates (milliseconds). */
 #define SLEEP_DURATION        5000
@@ -152,78 +141,6 @@ print_period(period_t period, double transition)
 		       transition*100);
 		break;
 	}
-}
-
-/* Interpolate color setting structs given alpha. */
-static void
-interpolate_color_settings(
-	const color_setting_t *first,
-	const color_setting_t *second,
-	double alpha,
-	color_setting_t *result)
-{
-	alpha = CLAMP(0.0, alpha, 1.0);
-
-	result->temperature = (1.0-alpha)*first->temperature +
-		alpha*second->temperature;
-	result->brightness = (1.0-alpha)*first->brightness +
-		alpha*second->brightness;
-	for (int i = 0; i < 3; i++) {
-		result->gamma[i] = (1.0-alpha)*first->gamma[i] +
-			alpha*second->gamma[i];
-	}
-}
-
-/* Interpolate color setting structs transition scheme. */
-static void
-interpolate_transition_scheme(
-	const transition_scheme_t *transition,
-	double alpha,
-	color_setting_t *result)
-{
-	const color_setting_t *day = &transition->day;
-	const color_setting_t *night = &transition->night;
-
-	alpha = CLAMP(0.0, alpha, 1.0);
-	interpolate_color_settings(night, day, alpha, result);
-}
-
-/* Return 1 if color settings have major differences, otherwise 0.
-   Used to determine if a fade should be applied in continual mode. */
-static int
-color_setting_diff_is_major(
-	const color_setting_t *first,
-	const color_setting_t *second)
-{
-	return (abs(first->temperature - second->temperature) > 25 ||
-		fabsf(first->brightness - second->brightness) > 0.1 ||
-		fabsf(first->gamma[0] - second->gamma[0]) > 0.1 ||
-		fabsf(first->gamma[1] - second->gamma[1]) > 0.1 ||
-		fabsf(first->gamma[2] - second->gamma[2]) > 0.1);
-}
-
-/* Reset color setting to default values. */
-static void
-color_setting_reset(color_setting_t *color)
-{
-	color->temperature = NEUTRAL_TEMP;
-	color->gamma[0] = 1.0;
-	color->gamma[1] = 1.0;
-	color->gamma[2] = 1.0;
-	color->brightness = 1.0;
-}
-
-
-/* Check whether gamma is within allowed levels. */
-static int
-gamma_is_valid(const float gamma[3])
-{
-	return !(gamma[0] < MIN_GAMMA ||
-		 gamma[0] > MAX_GAMMA ||
-		 gamma[1] < MIN_GAMMA ||
-		 gamma[1] > MAX_GAMMA ||
-		 gamma[2] < MIN_GAMMA ||
-		 gamma[2] > MAX_GAMMA);
 }
 
 /* Easing function for fade.
@@ -412,7 +329,9 @@ run_continual_mode(const location_provider_t *provider,
 		if (fade_length != 0) {
 			fade_time += 1;
 			double frac = fade_time / (double)fade_length;
-			double alpha = CLAMP(0.0, ease_fade(frac), 1.0);
+			/* no need for CLAMP here, since
+			   interpolate_color_settings() will apply CLAMP */
+			double alpha = ease_fade(frac);
 
 			interpolate_color_settings(
 				&fade_start_interp, &target_interp, alpha,
@@ -622,45 +541,6 @@ main(int argc, char *argv[])
 				MIN_TEMP, MAX_TEMP);
 			exit(EXIT_FAILURE);
 		}
-	}
-
-	/* Brightness */
-	if (options.scheme.day.brightness < MIN_BRIGHTNESS ||
-	    options.scheme.day.brightness > MAX_BRIGHTNESS ||
-	    options.scheme.night.brightness < MIN_BRIGHTNESS ||
-	    options.scheme.night.brightness > MAX_BRIGHTNESS) {
-		fprintf(stderr,
-			_("Brightness values must be between %.1f and %.1f.\n"),
-			MIN_BRIGHTNESS, MAX_BRIGHTNESS);
-		exit(EXIT_FAILURE);
-	}
-
-	if (options.verbose) {
-		printf(_("Brightness: %.2f:%.2f\n"),
-		       options.scheme.day.brightness,
-		       options.scheme.night.brightness);
-	}
-
-	/* Gamma */
-	if (!gamma_is_valid(options.scheme.day.gamma) ||
-	    !gamma_is_valid(options.scheme.night.gamma)) {
-		fprintf(stderr,
-			_("Gamma value must be between %.1f and %.1f.\n"),
-			MIN_GAMMA, MAX_GAMMA);
-		exit(EXIT_FAILURE);
-	}
-
-	if (options.verbose) {
-		/* TRANSLATORS: The string in parenthesis is either
-		   Daytime or Night (translated). */
-		printf(_("Gamma (%s): %.3f, %.3f, %.3f\n"),
-		       _("Daytime"), options.scheme.day.gamma[0],
-		       options.scheme.day.gamma[1],
-		       options.scheme.day.gamma[2]);
-		printf(_("Gamma (%s): %.3f, %.3f, %.3f\n"),
-		       _("Night"), options.scheme.night.gamma[0],
-		       options.scheme.night.gamma[1],
-		       options.scheme.night.gamma[2]);
 	}
 
 	transition_scheme_t *scheme = &options.scheme;

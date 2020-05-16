@@ -101,24 +101,11 @@ location_state_t *location_state;
 #define LAT_MAX    90.0
 #define LON_MIN  -180.0
 #define LON_MAX   180.0
-#define TEMP_MIN   1000
-#define TEMP_MAX  25000
 
 /* The color temperature when no adjustment is applied. */
 #define TEMP_NEUTRAL  6500
 
 /* Default values for parameters. */
-#define DEFAULT_DAY_TEMP    TEMP_NEUTRAL
-#define DEFAULT_NIGHT_TEMP  3500
-#define DEFAULT_BRIGHTNESS   1.0
-#define DEFAULT_GAMMA        1.0
-
-/* Angular elevation of the sun at which the color temperature
-   transition period starts and ends (in degress).
-   Transition during twilight, and while the sun is lower than
-   3.0 degrees above the horizon. */
-#define TRANSITION_LOW     SOLAR_CIVIL_TWILIGHT_ELEV
-#define TRANSITION_HIGH    3.0
 
 static const gchar *period_names[] = {
 	"None", "Day", "Night", "Transition"
@@ -145,17 +132,14 @@ static int have_location = 0;
 static gdouble latitude = 0.0;
 static gdouble longitude = 0.0;
 
-/* Temperature bounds */
-static guint temp_day = DEFAULT_DAY_TEMP;
-static guint temp_night = DEFAULT_NIGHT_TEMP;
 
-/* Current temperature */
-static guint temperature = 0;
-static guint temp_now = TEMP_NEUTRAL;
+static color_setting_t color_setting;
+static color_setting_t color_setting_now;
+static color_setting_t color_setting_trans_start;
 
 /* Short transition parameters */
 static guint trans_timer = 0;
-static guint trans_temp_start = 0;
+/* static guint trans_temp_start = 0; */
 static guint trans_length = 0;
 static guint trans_time = 0;
 
@@ -176,10 +160,8 @@ static gdouble forced_lon = 0.0;
 static guint screen_update_timer = 0;
 
 /* Brightness */
-#define MIN_BRIGHTNESS 0.1
-#define MAX_BRIGHTNESS 1.0
 #define BRIGHTNESS_STEP 0.1
-static gdouble brightness = 1.0;
+static gdouble brightness = -1.0;
 static gboolean brightness_changed = FALSE;
 
 
@@ -276,9 +258,8 @@ update_elevation()
 static void
 update_temperature(double a)
 {
-	if (a >= 1.0) temperature = temp_day;
-	else if (a <= 0.0) temperature = temp_night;
-	else temperature = (1.0-a)*temp_night + a*temp_day;
+	interpolate_transition_scheme(&options.scheme, a,
+		&color_setting);
 }
 
 
@@ -288,16 +269,14 @@ short_transition_update_cb(gpointer data)
 {
 	trans_time += 1;
 	gfloat a = trans_time/(gfloat)trans_length;
-	guint temp = (1.0-a)*trans_temp_start + a*temperature;
+	interpolate_color_settings(&color_setting_trans_start,
+		&color_setting, a, &color_setting_now);
 	
 	if (current_method != NULL) {
-		/* temperature, gamma, brightness */
-		color_setting_t color = { temp, {1.0, 1.0, 1.0}, brightness};
-		
-		current_method->set_temperature(gamma_state, &color, 0);
+		current_method->set_temperature(gamma_state,
+			&color_setting_now, 0);
 	}
-	temp_now = temp;
-
+	
 	if (trans_time >= trans_length) {
 		trans_time = 0;
 		trans_length = 0;
@@ -314,7 +293,7 @@ screen_update_cb(gpointer data)
 	GDBusConnection *conn = G_DBUS_CONNECTION(data);
 
 	gboolean prev_inhibit = inhibited;
-	guint prev_temp = temperature;
+	color_setting_t color_setting_prev = color_setting;
 	period_t prev_period = period;
 
 	/* Update elevation from location */
@@ -329,7 +308,7 @@ screen_update_cb(gpointer data)
 		} else {
 			/* If we have no location, set the temperature to neutral.
 			   It can be still set to a forced temperature later. */
-			temperature = TEMP_NEUTRAL;
+			color_setting.temperature = TEMP_NEUTRAL;
 		}
 	} else {
 		double now;
@@ -350,7 +329,7 @@ screen_update_cb(gpointer data)
 	inhibited = g_hash_table_size(inhibitors) > 0;
 
 	if (inhibited) {
-		temperature = TEMP_NEUTRAL;
+		color_setting_reset(&color_setting);
 	} else {
 		/* Check for forced temperature */
 		int forced_index = -1;
@@ -362,21 +341,27 @@ screen_update_cb(gpointer data)
 		}
 
 		if (forced_index >= 0) {
-			temperature = forced_temp[forced_index];
+			color_setting.temperature = forced_temp[forced_index];
 		}
 	}
+	
+	/* set brightness */
+	if (brightness >= MIN_BRIGHTNESS &&
+			brightness <= MAX_BRIGHTNESS)
+		color_setting.brightness = brightness;
 
-	g_print("Temperature: %u\n", temperature);
+	g_print("Temperature: %u\n", color_setting.temperature);
 
 	/* Signal if temperature has changed */
-	if (prev_temp != temperature ||
+	if (color_setting_prev.temperature != color_setting.temperature ||
 	    prev_inhibit != inhibited ||
 	    prev_period != period) {
 		GError *local_error = NULL;
 		GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
-		if (prev_temp != temperature) {
+		if (color_setting_prev.temperature != color_setting.temperature) {
 			g_variant_builder_add(builder, "{sv}",
-					      "Temperature", g_variant_new_uint32(temperature));
+					      "Temperature", g_variant_new_uint32(
+					      color_setting.temperature));
 		}
 		if (prev_inhibit != inhibited) {
 			g_variant_builder_add(builder, "{sv}",
@@ -402,25 +387,27 @@ screen_update_cb(gpointer data)
 
 	/* If the temperature difference is large enough,
 	   make a nice transition. */
-	if (abs(temperature - temp_now) > 25) {
+	if (color_setting_diff_is_major(&color_setting_now,
+			&color_setting)) {
 		if (trans_timer != 0) {
 			g_source_remove(trans_timer);
 		}
 
-		g_print("Create short transition: %u -> %u\n", temp_now, temperature);
-		trans_temp_start = temp_now;
+		g_print("Create short transition: %u -> %u\n",
+			color_setting_now.temperature, color_setting.temperature);
+		color_setting_trans_start = color_setting_now;
 		trans_length = 40 - trans_time;
 		trans_time = 0;
 
 		trans_timer = g_timeout_add(100, short_transition_update_cb, NULL);
-	} else if (temperature != temp_now || brightness_changed) {
-		if (current_method != NULL) {
-			/* temperature, gamma, brightness */
-			color_setting_t color = { temperature, {1.0, 1.0, 1.0}, brightness};
-			
-			current_method->set_temperature(gamma_state, &color, 0);
+	} else if (color_setting_diff(&color_setting_now, &color_setting) ) {
+		if (trans_timer != 0) {
+			g_source_remove(trans_timer);
 		}
-		temp_now = temperature;
+		if (current_method != NULL) {
+			current_method->set_temperature(gamma_state, &color_setting, 0);
+		}
+		color_setting_now = color_setting;
 	}
 	brightness_changed = FALSE;
 
@@ -609,7 +596,7 @@ handle_method_call(GDBusConnection *conn,
 		}
 
 		/* Check parameter bounds */
-		if (temp < TEMP_MIN || temp > TEMP_MAX) {
+		if (temp < MIN_TEMP || temp > MAX_TEMP) {
 			g_dbus_method_invocation_return_dbus_error(invocation,
 								   "dk.jonls.redshift.Redshift.InvalidArgument",
 								   "Temperature is invalid");
@@ -720,7 +707,7 @@ handle_method_call(GDBusConnection *conn,
 						      g_variant_new("(d)", elevation));
 	} else if (g_strcmp0(method_name, "BrightnessUp") == 0 ||
 			g_strcmp0(method_name, "BrightnessDown") == 0) {
-		gdouble br2 = brightness;
+		gdouble br2 = color_setting.brightness;
 
 		if (g_strcmp0(method_name, "BrightnessUp") == 0) {
 			br2 += BRIGHTNESS_STEP;
@@ -730,7 +717,7 @@ handle_method_call(GDBusConnection *conn,
 			if(br2 < MIN_BRIGHTNESS) br2 = MIN_BRIGHTNESS;
 		}
 
-		if(br2 != brightness) {
+		if(br2 != color_setting.brightness) {
 			brightness = br2;
 			brightness_changed = TRUE;
 			screen_update_restart(conn);
@@ -757,7 +744,7 @@ handle_get_property(GDBusConnection *conn,
 	} else if (g_strcmp0(prop_name, "Period") == 0) {
 		ret = g_variant_new_string(period_names[period]);
 	} else if (g_strcmp0(prop_name, "Temperature") == 0) {
-		ret = g_variant_new_uint32(temperature);
+		ret = g_variant_new_uint32(color_setting.temperature);
 	} else if (g_strcmp0(prop_name, "CurrentLatitude") == 0) {
 		gdouble lat = latitude;
 		if (forced_location_cookie != 0) lat = forced_lat;
@@ -767,11 +754,11 @@ handle_get_property(GDBusConnection *conn,
 		if (forced_location_cookie != 0) lon = forced_lon;
 		ret = g_variant_new_double(lon);
 	} else if (g_strcmp0(prop_name, "TemperatureDay") == 0) {
-		ret = g_variant_new_uint32(temp_day);
+		ret = g_variant_new_uint32(options.scheme.day.temperature);
 	} else if (g_strcmp0(prop_name, "TemperatureNight") == 0) {
-		ret = g_variant_new_uint32(temp_night);
+		ret = g_variant_new_uint32(options.scheme.night.temperature);
 	} else if (g_strcmp0(prop_name, "Brightness") == 0) {
-		ret = g_variant_new_double(brightness);
+		ret = g_variant_new_double(color_setting.brightness);
 	}
 
 	return ret;
@@ -790,20 +777,20 @@ handle_set_property(GDBusConnection *conn,
 	if (g_strcmp0(prop_name, "TemperatureDay") == 0) {
 		guint32 temp = g_variant_get_uint32(value);
 
-		if (temp < TEMP_MIN || temp > TEMP_MAX) {
+		if (temp < MIN_TEMP || temp > MAX_TEMP) {
 			g_set_error(error,
 				    G_IO_ERROR,
 				    G_IO_ERROR_FAILED,
 				    "Temperature out of bounds");
 		} else {
-			temp_day = temp;
+			options.scheme.day.temperature = temp;
 
 			screen_update_restart(conn);
 
 			GError *local_error = NULL;
 			GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
 			g_variant_builder_add(builder, "{sv}", "TemperatureDay",
-					      g_variant_new_uint32(temp_day));
+					      g_variant_new_uint32(options.scheme.day.temperature));
 
 			g_dbus_connection_emit_signal(conn, NULL,
 						      obj_path,
@@ -819,20 +806,20 @@ handle_set_property(GDBusConnection *conn,
 	} else if (g_strcmp0(prop_name, "TemperatureNight") == 0) {
 		guint32 temp = g_variant_get_uint32(value);
 
-		if (temp < TEMP_MIN || temp > TEMP_MAX) {
+		if (temp < MIN_TEMP || temp > MAX_TEMP) {
 			g_set_error(error,
 				    G_IO_ERROR,
 				    G_IO_ERROR_FAILED,
 				    "Temperature out of bounds");
 		} else {
-			temp_night = temp;
+			options.scheme.night.temperature = temp;
 
 			screen_update_restart(conn);
 
 			GError *local_error = NULL;
 			GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
 			g_variant_builder_add(builder, "{sv}", "TemperatureNight",
-					      g_variant_new_uint32(temp_night));
+					      g_variant_new_uint32(options.scheme.night.temperature));
 
 			g_dbus_connection_emit_signal(conn, NULL,
 						      obj_path,
@@ -852,7 +839,7 @@ handle_set_property(GDBusConnection *conn,
 				    G_IO_ERROR,
 				    G_IO_ERROR_FAILED,
 				    "Brightness out of bounds");
-		} else if(br != brightness) {
+		} else if(br != color_setting.brightness) {
 			brightness = br;
 			brightness_changed = TRUE;
 			screen_update_restart(conn);
@@ -935,7 +922,11 @@ main(int argc, char *argv[])
 	/* Create hash table for inhibitors (set) */
 	inhibitors = g_hash_table_new(NULL, NULL);
 	
-	
+	/* initialie color settings to default */
+	color_setting_reset(&color_setting);
+	color_setting_reset(&color_setting_now);
+	color_setting_reset(&color_setting_trans_start);
+
 	
 	/* List of gamma methods. */
 	const gamma_method_t gamma_methods[] = {
@@ -1022,11 +1013,6 @@ main(int argc, char *argv[])
 			gamma_methods);
 	if (r < 0) exit(EXIT_FAILURE);
 	current_method = options.method;
-	
-	/* Set day and night temperature based on the options */
-	temp_day = options.scheme.day.temperature;
-	temp_night = options.scheme.night.temperature;
-	
 
 	/* Build node info from XML */
 	introspection_data = g_dbus_node_info_new_for_xml(introspection_xml,
