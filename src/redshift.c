@@ -281,7 +281,8 @@ run_continual_mode(const location_provider_t *provider,
 			" to become available...\n"), stderr);
 
 		/* Get initial location from provider */
-		r = provider_get_location(provider, location_state, -1, &loc);
+		int timeout = -1;
+		r = provider_get_location(provider, location_state, &timeout, &loc);
 		if (r < 0) {
 			fputs(_("Unable to get location"
 				" from provider.\n"), stderr);
@@ -462,38 +463,20 @@ run_continual_mode(const location_provider_t *provider,
 
 		/* Update location. */
 		int loc_fd = -1;
-		if (need_location) {
-			loc_fd = provider->get_fd(location_state);
-		}
-
-		if (loc_fd >= 0) {
-			/* Provider is dynamic. */
-			struct pollfd pollfds[1];
-			pollfds[0].fd = loc_fd;
-			pollfds[0].events = POLLIN;
-			int r = poll(pollfds, 1, delay);
-			if (r < 0) {
-				if (errno == EINTR) continue;
-				perror("poll");
-				fputs(_("Unable to get location"
-					" from provider.\n"), stderr);
-				return -1;
-			} else if (r == 0) {
-				continue;
-			}
-
+		if (need_location && provider->is_dynamic()) {
 			/* Get new location and availability
 			   information. */
 			location_t new_loc;
 			int new_available;
-			r = provider->handle(
-				location_state, &new_loc,
-				&new_available);
+			int r = provider_get_location(provider,
+				location_state, &delay, &new_loc);
+			
 			if (r < 0) {
 				fputs(_("Unable to get location"
 					" from provider.\n"), stderr);
 				return -1;
 			}
+			new_available = r;
 
 			if (!new_available &&
 			    new_available != location_available) {
@@ -503,21 +486,26 @@ run_continual_mode(const location_provider_t *provider,
 					" available...\n"), stderr);
 			}
 
+			if (!location_is_valid(&loc)) {
+				fputs(_("Invalid location returned"
+					" from provider.\n"), stderr);
+				return -1;
+			}
+
 			if (new_available &&
 			    (new_loc.lat != loc.lat ||
 			     new_loc.lon != loc.lon ||
 			     new_available != location_available)) {
 				loc = new_loc;
 				print_location(&loc);
+			} else if (delay) {
+				/* do the remaining sleep if
+				 * location has not changed */
+				systemtime_msleep(delay);
 			}
 
 			location_available = new_available;
 
-			if (!location_is_valid(&loc)) {
-				fputs(_("Invalid location returned"
-					" from provider.\n"), stderr);
-				return -1;
-			}
 		} else {
 			systemtime_msleep(delay);
 		}
@@ -700,8 +688,9 @@ main(int argc, char *argv[])
 				" to become available...\n"), stderr);
 
 			/* Wait for location provider. */
+			int timeout = -1;
 			int r = provider_get_location(
-				options.provider, location_state, -1, &loc);
+				options.provider, location_state, &timeout, &loc);
 			if (r < 0) {
 				fputs(_("Unable to get location"
 					" from provider.\n"), stderr);

@@ -317,18 +317,20 @@ methods_try_start_all(options_t *options, config_ini_state_t *config_state,
 
 /* Try to get location from provider.
 
-   If location provider is dynamic, waits until timeout (milliseconds)
-   has elapsed or forever if timeout is -1.
+   If location provider has a pipe interface, waits until timeout
+   (milliseconds) has elapsed or forever if timeout is -1.
 
    Otherwise just checks if a new location is available and returns
    immediately.
 
    Writes location to loc. Returns -1 on error, 1 if location became
-   available, 0 if not (timeout reached or not dynamic provider). */
+   available, 0 if not (timeout reached or not dynamic provider).
+   
+   Updates timeout with the remaining time. */
 int
 provider_get_location(
 	const location_provider_t *provider, location_state_t *state,
-	int timeout, location_t *loc)
+	int *timeout, location_t *loc)
 {
 	int available = 0;
 	struct pollfd pollfds[1];
@@ -349,7 +351,7 @@ provider_get_location(
 			/* Poll on file descriptor until ready. */
 			pollfds[0].fd = loc_fd;
 			pollfds[0].events = POLLIN;
-			r = poll(pollfds, 1, timeout);
+			r = poll(pollfds, 1, *timeout);
 			if (r < 0) {
 				perror("poll");
 				return -1;
@@ -366,14 +368,14 @@ provider_get_location(
 			}
 
 			/* Adjust timeout by elapsed time */
-			if (timeout >= 0) {
-				timeout -= (later - now) * 1000;
-				timeout = timeout < 0 ? 0 : timeout;
+			if (*timeout >= 0) {
+				*timeout -= (later - now) * 1000;
+				*timeout = *timeout < 0 ? 0 : *timeout;
 			}
 			r = provider->handle(state, loc, &available);
 			if (r < 0) return -1;
 			if (available) return 1;
-			if (!timeout) return available;
+			if ( *timeout <= 0 ) return available;
 		}
 	}
 	else {

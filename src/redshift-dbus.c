@@ -250,8 +250,9 @@ update_elevation()
 	else {
 		/* Otherwise, try to get update from location provider */
 		location_t loc;
+		int timeout = 0;
 		int r = provider_get_location(options.provider,
-			location_state, 0, &loc);
+			location_state, &timeout, &loc);
 		/* TODO: on error, should we abort? */
 		if(r) {
 			latitude = loc.lat;
@@ -982,7 +983,9 @@ main(int argc, char *argv[])
 
 		/* Get initial location from provider */
 		location_t loc = { NAN, NAN };
-		r = provider_get_location(options.provider, location_state, 1000, &loc);
+		int timeout = 1000;
+		r = provider_get_location(options.provider,
+			location_state, &timeout, &loc);
 		if (r < 0) {
 			fputs(_("Unable to get location from provider.\n"), stderr);
 			return -1;

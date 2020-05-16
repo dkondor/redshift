@@ -27,16 +27,18 @@
 
 /* Try to get location from provider.
 
-   If location provider is dynamic, waits until timeout (milliseconds)
-   has elapsed or forever if timeout is -1.
+   If location provider has a pipe interface, waits until timeout
+   (milliseconds) has elapsed or forever if timeout is -1.
 
    Otherwise just checks if a new location is available and returns
    immediately.
 
    Writes location to loc. Returns -1 on error, 1 if location became
-   available, 0 if not (timeout reached or not dynamic provider). */
+   available, 0 if not (timeout reached or not dynamic provider).
+   
+   Updates timeout with the remaining time. */
 int provider_get_location(const location_provider_t *provider,
-	location_state_t *state, int timeout, location_t *loc);
+	location_state_t *state, int *timeout, location_t *loc);
 
 /* Try to start location provider */
 int provider_try_start(const location_provider_t *provider,
