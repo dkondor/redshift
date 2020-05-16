@@ -334,9 +334,9 @@ run_geoclue2_loop(void *state_)
 		GIOChannel *pipe_channel = g_io_channel_unix_new(state->pipe_fd_write);
 		GSource *pipe_source = g_io_create_watch(
 			pipe_channel, G_IO_IN | G_IO_HUP | G_IO_ERR);
-			g_source_set_callback(
+		g_source_set_callback(
 			pipe_source, (GSourceFunc)on_pipe_closed, state, NULL);
-			g_source_attach(pipe_source, context);
+		g_source_attach(pipe_source, context);
 
 		g_main_loop_run(state->loop);
 
