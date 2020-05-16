@@ -88,7 +88,8 @@ static const gamma_method_t *current_method = NULL;
 # include "location-corelocation.h"
 #endif
 
-location_state_t *location_state;
+location_state_t *location_state = NULL;
+GIOChannel *provider_pipe_channel = NULL;
 
 
 /* DBus names */
@@ -882,6 +883,15 @@ static const GDBusInterfaceVTable interface_vtable = {
 	handle_set_property
 };
 
+/* Callback when a location provider signals on a pipe. */
+static gboolean
+provider_pipe(GIOChannel *channel, GIOCondition condition, gpointer user_data)
+{
+	fprintf(stderr,"pipe signal received\n");
+	GDBusConnection *conn = (GDBusConnection*)user_data;
+	screen_update_restart(conn);
+	return TRUE;
+}
 
 static void
 on_bus_acquired(GDBusConnection *conn,
@@ -901,6 +911,15 @@ on_bus_acquired(GDBusConnection *conn,
 	/* Set callback for location updates */
 	options.provider->set_callback(location_state,
 		(location_provider_callback_func*)screen_update_restart, conn);
+	
+	/* Alternatively, set a listener for the pipe fd from the provider */
+	int pfd = options.provider->get_fd(location_state);
+	if (pfd >= 0) {
+		fprintf(stderr,"Setting io watch\n");
+		provider_pipe_channel = g_io_channel_unix_new(pfd);
+		g_io_add_watch_full(provider_pipe_channel, 0, G_IO_IN,
+			provider_pipe, conn, NULL);
+	}
 
 	/* Start screen update timer */
 	screen_update_restart(conn);
@@ -1074,7 +1093,11 @@ main(int argc, char *argv[])
 
 	/* Clean up */
 	g_bus_unown_name(owner_id);
-
+	
+	if (provider_pipe_channel) {
+		g_io_channel_unref(provider_pipe_channel);
+	}
+	
 	g_print("Restoring gamma ramps.\n");
 
 	/* Restore gamma ramps */
