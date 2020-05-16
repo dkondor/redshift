@@ -130,6 +130,20 @@ location_manual_handle(
 	return 0;
 }
 
+static int
+location_manual_is_dynamic()
+{
+	return 0;
+}
+
+static void
+location_manual_set_callback(
+	location_state_t *state, location_provider_callback_func *cb,
+	void *dat)
+{
+	/* Callback is never called -- location does not change */
+	return;
+}
 
 const location_provider_t manual_location_provider = {
 	"manual",
@@ -139,5 +153,7 @@ const location_provider_t manual_location_provider = {
 	(location_provider_print_help_func *)location_manual_print_help,
 	(location_provider_set_option_func *)location_manual_set_option,
 	(location_provider_get_fd_func *)location_manual_get_fd,
-	(location_provider_handle_func *)location_manual_handle
+	(location_provider_handle_func *)location_manual_handle,
+	(location_provider_is_dynamic_func *)location_manual_is_dynamic,
+	(location_provider_set_callback_func *)location_manual_set_callback
 };

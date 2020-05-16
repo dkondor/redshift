@@ -25,10 +25,16 @@
 #include "options.h"
 #include "config-ini.h"
 
-/* Wait for location to become available from provider.
-   Waits until timeout (milliseconds) has elapsed or forever if timeout
-   is -1. Writes location to loc. Returns -1 on error,
-   0 if timeout was reached, 1 if location became available. */
+/* Try to get location from provider.
+
+   If location provider is dynamic, waits until timeout (milliseconds)
+   has elapsed or forever if timeout is -1.
+
+   Otherwise just checks if a new location is available and returns
+   immediately.
+
+   Writes location to loc. Returns -1 on error, 1 if location became
+   available, 0 if not (timeout reached or not dynamic provider). */
 int provider_get_location(const location_provider_t *provider,
 	location_state_t *state, int timeout, location_t *loc);
 

@@ -52,6 +52,9 @@ typedef struct {
 	int error;
 	float latitude;
 	float longitude;
+	location_provider_callback_func* cb;
+	void* cb_data;
+	int use_thread;
 } location_geoclue2_state_t;
 
 
@@ -115,7 +118,7 @@ geoclue_client_signal_cb(GDBusProxy *client, gchar *sender_name,
 		return;
 	}
 
-	g_mutex_lock(&state->lock);
+	if (state->use_thread) g_mutex_lock(&state->lock);
 
 	/* Read location properties */
 	GVariant *lat_v = g_dbus_proxy_get_cached_property(
@@ -128,9 +131,12 @@ geoclue_client_signal_cb(GDBusProxy *client, gchar *sender_name,
 
 	state->available = 1;
 
-	g_mutex_unlock(&state->lock);
-
-	pipeutils_signal(state->pipe_fd_write);
+	if (state->use_thread) {
+		g_mutex_unlock(&state->lock);
+		pipeutils_signal(state->pipe_fd_write);
+	} else {
+		if (state->cb) state->cb(state->cb_data);
+	}
 }
 
 /* Callback when GeoClue name appears on the bus */
@@ -281,13 +287,14 @@ on_name_vanished(GDBusConnection *connection, const gchar *name,
 {
 	location_geoclue2_state_t *state = user_data;
 
-	g_mutex_lock(&state->lock);
+	if (state->use_thread) g_mutex_lock(&state->lock);
 
 	state->available = 0;
 
-	g_mutex_unlock(&state->lock);
-
-	pipeutils_signal(state->pipe_fd_write);
+	if (state->use_thread) {
+		g_mutex_unlock(&state->lock);
+		pipeutils_signal(state->pipe_fd_write);
+	}
 }
 
 /* Callback when the pipe to the main thread is closed. */
@@ -295,7 +302,7 @@ static gboolean
 on_pipe_closed(GIOChannel *channel, GIOCondition condition, gpointer user_data)
 {
 	location_geoclue2_state_t *state = user_data;
-	g_main_loop_quit(state->loop);
+	if (state->loop) g_main_loop_quit(state->loop);
 
 	return FALSE;
 }
@@ -307,9 +314,12 @@ run_geoclue2_loop(void *state_)
 {
 	location_geoclue2_state_t *state = state_;
 
-	GMainContext *context = g_main_context_new();
-	g_main_context_push_thread_default(context);
-	state->loop = g_main_loop_new(context, FALSE);
+	GMainContext *context = NULL;
+	if (state->use_thread) {
+		context = g_main_context_new();
+		g_main_context_push_thread_default(context);
+		state->loop = g_main_loop_new(context, FALSE);
+	}
 
 	guint watcher_id = g_bus_watch_name(
 		G_BUS_TYPE_SYSTEM,
@@ -319,24 +329,26 @@ run_geoclue2_loop(void *state_)
 		on_name_vanished,
 		state, NULL);
 
-	/* Listen for closure of pipe */
-	GIOChannel *pipe_channel = g_io_channel_unix_new(state->pipe_fd_write);
-	GSource *pipe_source = g_io_create_watch(
-		pipe_channel, G_IO_IN | G_IO_HUP | G_IO_ERR);
-        g_source_set_callback(
-		pipe_source, (GSourceFunc)on_pipe_closed, state, NULL);
-        g_source_attach(pipe_source, context);
+	if (state->use_thread) {
+		/* Listen for closure of pipe */
+		GIOChannel *pipe_channel = g_io_channel_unix_new(state->pipe_fd_write);
+		GSource *pipe_source = g_io_create_watch(
+			pipe_channel, G_IO_IN | G_IO_HUP | G_IO_ERR);
+			g_source_set_callback(
+			pipe_source, (GSourceFunc)on_pipe_closed, state, NULL);
+			g_source_attach(pipe_source, context);
 
-	g_main_loop_run(state->loop);
+		g_main_loop_run(state->loop);
 
-	g_source_unref(pipe_source);
-	g_io_channel_unref(pipe_channel);
-	close(state->pipe_fd_write);
+		g_source_unref(pipe_source);
+		g_io_channel_unref(pipe_channel);
+		close(state->pipe_fd_write);
 
-	g_bus_unwatch_name(watcher_id);
+		g_bus_unwatch_name(watcher_id);
 
-	g_main_loop_unref(state->loop);
-	g_main_context_unref(context);
+		g_main_loop_unref(state->loop);
+		g_main_context_unref(context);
+	}
 
 	return NULL;
 }
@@ -349,6 +361,10 @@ location_geoclue2_init(location_geoclue2_state_t **state)
 #endif
 	*state = malloc(sizeof(location_geoclue2_state_t));
 	if (*state == NULL) return -1;
+	(*state)->loop = NULL;
+	(*state)->thread = NULL;
+	(*state)->use_thread = 1;
+	(*state)->cb = 0;
 	return 0;
 }
 
@@ -363,20 +379,23 @@ location_geoclue2_start(location_geoclue2_state_t *state)
 	state->latitude = 0;
 	state->longitude = 0;
 
-	int pipefds[2];
-	int r = pipeutils_create_nonblocking(pipefds);
-	if (r < 0) {
-		fputs(_("Failed to start GeoClue2 provider!\n"), stderr);
-		return -1;
-	}
-
-	state->pipe_fd_read = pipefds[0];
-	state->pipe_fd_write = pipefds[1];
-
-	pipeutils_signal(state->pipe_fd_write);
-
 	g_mutex_init(&state->lock);
-	state->thread = g_thread_new("geoclue2", run_geoclue2_loop, state);
+	if (state->use_thread) {
+		int pipefds[2];
+		int r = pipeutils_create_nonblocking(pipefds);
+		if (r < 0) {
+			fputs(_("Failed to start GeoClue2 provider!\n"), stderr);
+			return -1;
+		}
+
+		state->pipe_fd_read = pipefds[0];
+		state->pipe_fd_write = pipefds[1];
+
+		pipeutils_signal(state->pipe_fd_write);
+
+		state->thread = g_thread_new("geoclue2", run_geoclue2_loop, state);
+	}
+	else run_geoclue2_loop(state);
 
 	return 0;
 }
@@ -389,7 +408,7 @@ location_geoclue2_free(location_geoclue2_state_t *state)
 	}
 
 	/* Closing the pipe should cause the thread to exit. */
-	g_thread_join(state->thread);
+	if(state->thread) g_thread_join(state->thread);
 	state->thread = NULL;
 
 	g_mutex_clear(&state->lock);
@@ -409,6 +428,26 @@ static int
 location_geoclue2_set_option(location_geoclue2_state_t *state,
 			     const char *key, const char *value)
 {
+	if (state->thread)
+	{
+		fprintf(stderr,
+		_("Cannot set method parameter after starting the listener thread!\n"));
+		return -1;
+	}
+	if (strcmp(key,"use-thread") == 0)
+	{
+		if (strcmp(value,"true") == 0 || strcmp(value,"1") == 0)
+			state->use_thread = 1;
+		else if (strcmp(value,"false") == 0 || strcmp(value,"0") == 0)
+			state->use_thread = 0;
+		else {
+			fprintf(stderr,
+				_("Unknown value for parameter use-thread: `%s'.\n"),
+				value);
+			return -1;
+		}
+		return 0;
+	}
 	fprintf(stderr, _("Unknown method parameter: `%s'.\n"), key);
 	return -1;
 }
@@ -440,6 +479,22 @@ location_geoclue2_handle(
 	return 0;
 }
 
+static int
+location_geoclue2_is_dynamic()
+{
+	return 1;
+}
+
+static void
+location_geoclue2_set_callback(
+	location_geoclue2_state_t *state, location_provider_callback_func *cb,
+	void *data)
+{
+	state->cb = cb;
+	state->cb_data = data;
+}
+
+
 
 const location_provider_t geoclue2_location_provider = {
 	"geoclue2",
@@ -449,5 +504,7 @@ const location_provider_t geoclue2_location_provider = {
 	(location_provider_print_help_func *)location_geoclue2_print_help,
 	(location_provider_set_option_func *)location_geoclue2_set_option,
 	(location_provider_get_fd_func *)location_geoclue2_get_fd,
-	(location_provider_handle_func *)location_geoclue2_handle
+	(location_provider_handle_func *)location_geoclue2_handle,
+	(location_provider_is_dynamic_func *)location_geoclue2_is_dynamic,
+	(location_provider_set_callback_func *)location_geoclue2_set_callback
 };

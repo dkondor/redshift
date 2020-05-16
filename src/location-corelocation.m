@@ -286,6 +286,23 @@ location_corelocation_handle(
   return 0;
 }
 
+static int
+location_corelocation_is_dynamic()
+{
+	return 1;
+}
+
+static void
+location_corelocation_set_callback(
+	location_state_t *state, location_provider_callback_func *cb,
+	void *dat)
+{
+	/* Callback is never called -- caller should use
+	   provider_get_location() from utils.c to wait 
+	   for updates */
+	return;
+}
+
 
 const location_provider_t corelocation_location_provider = {
   "corelocation",
@@ -295,5 +312,7 @@ const location_provider_t corelocation_location_provider = {
   (location_provider_print_help_func *)location_corelocation_print_help,
   (location_provider_set_option_func *)location_corelocation_set_option,
   (location_provider_get_fd_func *)location_corelocation_get_fd,
-  (location_provider_handle_func *)location_corelocation_handle
+  (location_provider_handle_func *)location_corelocation_handle,
+  (location_provider_is_dynamic_func *)location_manual_is_dynamic,
+  (location_provider_set_callback_func *)location_manual_set_callback
 };

@@ -315,10 +315,16 @@ methods_try_start_all(options_t *options, config_ini_state_t *config_state,
 }
 
 
-/* Wait for location to become available from provider.
-   Waits until timeout (milliseconds) has elapsed or forever if timeout
-   is -1. Writes location to loc. Returns -1 on error,
-   0 if timeout was reached, 1 if location became available. */
+/* Try to get location from provider.
+
+   If location provider is dynamic, waits until timeout (milliseconds)
+   has elapsed or forever if timeout is -1.
+
+   Otherwise just checks if a new location is available and returns
+   immediately.
+
+   Writes location to loc. Returns -1 on error, 1 if location became
+   available, 0 if not (timeout reached or not dynamic provider). */
 int
 provider_get_location(
 	const location_provider_t *provider, location_state_t *state,
@@ -326,11 +332,12 @@ provider_get_location(
 {
 	int available = 0;
 	struct pollfd pollfds[1];
-	while (!available) {
-		int loc_fd = provider->get_fd(state);
-		if (loc_fd >= 0) {
-			/* Provider is dynamic. */
-			/* TODO: This should use a monotonic time source. */
+	int loc_fd = provider->get_fd(state);
+	if (loc_fd >= 0) {
+		/* Provider is dynamic with a pipe to signal for updated.
+		   In this case, it makes sense to wait here. */
+		/* TODO: This should use a monotonic time source. */
+		while (1) {
 			double now;
 			int r = systemtime_get_time(&now);
 			if (r < 0) {
@@ -363,14 +370,19 @@ provider_get_location(
 				timeout -= (later - now) * 1000;
 				timeout = timeout < 0 ? 0 : timeout;
 			}
+			r = provider->handle(state, loc, &available);
+			if (r < 0) return -1;
+			if (available) return 1;
+			if (!timeout) return available;
 		}
-
-
+	}
+	else {
+		/* Location provider does not use pipe, just check if there
+		   was an update */
 		int r = provider->handle(state, loc, &available);
 		if (r < 0) return -1;
+		return available;
 	}
-
-	return 1;
 }
 
 

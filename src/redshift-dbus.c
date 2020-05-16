@@ -141,6 +141,7 @@ static gdouble elevation = 0.0;
 static period_t period = PERIOD_NONE;
 
 /* Location */
+static int have_location = 0;
 static gdouble latitude = 0.0;
 static gdouble longitude = 0.0;
 
@@ -234,7 +235,7 @@ static const gchar introspection_xml[] =
 
 
 /* Update elevation from location and time. */
-static void
+static int
 update_elevation()
 {
 	gdouble time = g_get_real_time() / 1000000.0;
@@ -250,20 +251,24 @@ update_elevation()
 		/* Otherwise, try to get update from location provider */
 		location_t loc;
 		int r = provider_get_location(options.provider,
-			location_state, 500, &loc);
+			location_state, 0, &loc);
 		/* TODO: on error, should we abort? */
 		if(r) {
 			latitude = loc.lat;
 			longitude = loc.lon;
+			have_location = 1;
 		}
-		lat = latitude;
-		lon = longitude;
+		if(have_location) {
+			lat = latitude;
+			lon = longitude;
+		} else return -1;
 	}
 
 	elevation = solar_elevation(time, lat, lon);
 
 	g_print("Location: %f, %f\n", lat, lon);
 	g_print("Elevation: %f\n", elevation);
+	return 0;
 }
 
 /* Update temperature from transition progress */
@@ -313,15 +318,16 @@ screen_update_cb(gpointer data)
 
 	/* Update elevation from location */
 	if (!options.scheme.use_time) {
-		update_elevation();
+		int r = update_elevation();
+		/* If no location is available, abort */
+		if(r < 0) return TRUE;
 
 		/* Calculate period */
 		period = get_period_from_elevation(&options.scheme, elevation);
 		double a = get_transition_progress_from_elevation(
 			&options.scheme, elevation);
 		update_temperature(a);
-	}
-	else {
+	} else {
 		double now;
 		int r = systemtime_get_time(&now);
 		if (r < 0) {
@@ -876,6 +882,10 @@ on_bus_acquired(GDBusConnection *conn,
 								  NULL);
 	g_assert(registration_id > 0);
 
+	/* Set callback for location updates */
+	options.provider->set_callback(location_state,
+		(location_provider_callback_func*)screen_update_restart, conn);
+
 	/* Start screen update timer */
 	screen_update_restart(conn);
 }
@@ -968,26 +978,36 @@ main(int argc, char *argv[])
 			&location_state, location_providers);
 		if(r < 0) exit(EXIT_FAILURE);
 	
-		fputs(_("Waiting for initial location"
-			" to become available...\n"), stderr);
+		fputs(_("Trying to get initial location...\n"), stderr);
 
 		/* Get initial location from provider */
 		location_t loc = { NAN, NAN };
-		r = provider_get_location(options.provider, location_state, -1, &loc);
+		r = provider_get_location(options.provider, location_state, 1000, &loc);
 		if (r < 0) {
 			fputs(_("Unable to get location from provider.\n"), stderr);
 			return -1;
 		}
 
-		if (!location_is_valid(&loc)) {
-			fputs(_("Invalid location returned from provider.\n"),
-			      stderr);
-			return -1;
-		}
+		if(r) {
+			/* We got a location */
+			if (!location_is_valid(&loc)) {
+				fputs(_("Invalid location returned from provider.\n"),
+					  stderr);
+				return -1;
+			}
 
-		print_location(&loc);
-		latitude = loc.lat;
-		longitude = loc.lon;
+			print_location(&loc);
+			latitude = loc.lat;
+			longitude = loc.lon;
+			have_location = 1;
+		} else {
+			/* No location yet -- this might not be an error if
+			   provider is dynamic */
+			if (!options.provider->is_dynamic()) {
+				fputs(_("No location available!\n"), stderr);
+				return -1;
+			}
+		}
 	}
 	
 	/* Setup gamma method */

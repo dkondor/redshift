@@ -129,6 +129,11 @@ typedef int location_provider_set_option_func(
 typedef int location_provider_get_fd_func(location_state_t *state);
 typedef int location_provider_handle_func(
 	location_state_t *state, location_t *location, int *available);
+typedef int location_provider_is_dynamic_func();
+typedef void location_provider_callback_func(void*);
+typedef void location_provider_set_callback_func(
+	location_state_t *state, location_provider_callback_func *cb,
+	void *dat);
 
 typedef struct {
 	char *name;
@@ -148,6 +153,19 @@ typedef struct {
 	/* Listen and handle location updates. */
 	location_provider_get_fd_func *get_fd;
 	location_provider_handle_func *handle;
+
+	/* Function to check if this location provider is dynamic.
+	   Used in redshift-dbus.c to determine if it is worth
+	   waiting for a location to become available if it is not
+	   available immediately. */
+	location_provider_is_dynamic_func *is_dynamic;
+	/* Callback function to call when location changes.
+	   Note: this only applies for dynamic location providers
+	   that run in the same thread (with g_main_loop()),
+	   i.e. geoclue2 if started from redshift-dbus.c.
+	   Location updates should still be checked with the 
+	   handle() function. */
+	location_provider_set_callback_func* set_callback;
 } location_provider_t;
 
 
