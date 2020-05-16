@@ -320,14 +320,17 @@ screen_update_cb(gpointer data)
 	/* Update elevation from location */
 	if (!options.scheme.use_time) {
 		int r = update_elevation();
-		/* If no location is available, abort */
-		if(r < 0) return TRUE;
-
-		/* Calculate period */
-		period = get_period_from_elevation(&options.scheme, elevation);
-		double a = get_transition_progress_from_elevation(
-			&options.scheme, elevation);
-		update_temperature(a);
+		if(r == 0) {
+			/* Calculate period -- only if we have a valid location */
+			period = get_period_from_elevation(&options.scheme, elevation);
+			double a = get_transition_progress_from_elevation(
+				&options.scheme, elevation);
+			update_temperature(a);
+		} else {
+			/* If we have no location, set the temperature to neutral.
+			   It can be still set to a forced temperature later. */
+			temperature = TEMP_NEUTRAL;
+		}
 	} else {
 		double now;
 		int r = systemtime_get_time(&now);
@@ -977,38 +980,39 @@ main(int argc, char *argv[])
 	if (need_location) {
 		r = providers_try_start_all(&options, &config_state,
 			&location_state, location_providers);
-		if(r < 0) exit(EXIT_FAILURE);
-	
-		fputs(_("Trying to get initial location...\n"), stderr);
-
-		/* Get initial location from provider */
-		location_t loc = { NAN, NAN };
-		int timeout = 1000;
-		r = provider_get_location(options.provider,
-			location_state, &timeout, &loc);
-		if (r < 0) {
-			fputs(_("Unable to get location from provider.\n"), stderr);
-			return -1;
-		}
-
-		if(r) {
-			/* We got a location */
-			if (!location_is_valid(&loc)) {
-				fputs(_("Invalid location returned from provider.\n"),
-					  stderr);
-				return -1;
-			}
-
-			print_location(&loc);
-			latitude = loc.lat;
-			longitude = loc.lon;
-			have_location = 1;
+		if(r < 0) {
+			fputs(_("No location provider is available. "
+				"Use the DBus interface to set your location.\n"),
+				stderr);
 		} else {
-			/* No location yet -- this might not be an error if
-			   provider is dynamic */
-			if (!options.provider->is_dynamic()) {
-				fputs(_("No location available!\n"), stderr);
-				return -1;
+			fputs(_("Trying to get initial location...\n"), stderr);
+
+			/* Get initial location from provider */
+			location_t loc = { NAN, NAN };
+			int timeout = 1000;
+			r = provider_get_location(options.provider,
+				location_state, &timeout, &loc);
+			if(r > 0) {
+				/* We got a location */
+				if (!location_is_valid(&loc)) {
+					fputs(_("Invalid location returned from provider.\n"),
+						  stderr);
+					return -1;
+				}
+
+				print_location(&loc);
+				latitude = loc.lat;
+				longitude = loc.lon;
+				have_location = 1;
+			} else {
+				/* No location yet -- this might not be an error if
+				   provider is dynamic */
+				if (r < 0 || !options.provider->is_dynamic()) {
+					fputs(_("No location available."
+						"Use the DBus interface to set your location.\n"),
+						stderr);
+					return -1;
+				}
 			}
 		}
 	}
