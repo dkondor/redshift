@@ -205,14 +205,16 @@ static const gchar introspection_xml[] =
 	"  </method>"
 	"  <method name='BrightnessUp'/>"
 	"  <method name='BrightnessDown'/>"
+	"  <method name='BrightnessReset'/>"
 	"  <property type='b' name='Inhibited' access='read'/>"
 	"  <property type='s' name='Period' access='read'/>"
 	"  <property type='u' name='Temperature' access='read'/>"
-	"  <property type='d' name='CurrentLatitude' access='read'/>"
-	"  <property type='d' name='CurrentLongitude' access='read'/>"
+	"  <property type='(dd)' name='CurrentLocation' access='read'/>"
 	"  <property type='u' name='TemperatureDay' access='readwrite'/>"
 	"  <property type='u' name='TemperatureNight' access='readwrite'/>"
 	"  <property type='d' name='Brightness' access='readwrite'/>"
+	"  <property type='d' name='BrightnessDay' access='readwrite'/>"
+	"  <property type='d' name='BrightnessNight' access='readwrite'/>"
 	" </interface>"
 	"</node>";
 
@@ -380,7 +382,8 @@ screen_update_cb(gpointer data)
 	/* Signal if temperature has changed */
 	if (color_setting_prev.temperature != color_setting.temperature ||
 	    prev_inhibit != inhibited ||
-	    prev_period != period) {
+	    prev_period != period ||
+	    color_setting_prev.brightness != color_setting.brightness) {
 		GError *local_error = NULL;
 		GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
 		if (color_setting_prev.temperature != color_setting.temperature) {
@@ -396,6 +399,11 @@ screen_update_cb(gpointer data)
 			const char *name = period_names[period];
 			g_variant_builder_add(builder, "{sv}",
 					      "Period", g_variant_new_string(name));
+		}
+		if(color_setting_prev.brightness != color_setting.brightness) {
+			g_variant_builder_add(builder, "{sv}",
+					      "Brightness", g_variant_new_double(
+					      color_setting.brightness));
 		}
 
 		g_dbus_connection_emit_signal(conn, NULL,
@@ -457,11 +465,11 @@ emit_position_changed(GDBusConnection *conn, gdouble lat, gdouble lon)
 {
 	/* Signal change in location */
 	GError *local_error = NULL;
+	GVariant* coords[2] = { g_variant_new_double(lon),
+			      g_variant_new_double(lat) };
 	GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
-	g_variant_builder_add(builder, "{sv}", "CurrentLatitude",
-			      g_variant_new_double(lat));
-	g_variant_builder_add(builder, "{sv}", "CurrentLongitude",
-			      g_variant_new_double(lon));
+	g_variant_builder_add(builder, "{sv}", "CurrentLocation",
+			      g_variant_new_array(NULL, coords, 2) );
 
 	g_dbus_connection_emit_signal(conn, NULL,
 				      REDSHIFT_OBJECT_PATH,
@@ -472,27 +480,6 @@ emit_position_changed(GDBusConnection *conn, gdouble lat, gdouble lon)
 						    builder,
 						    NULL),
 				      &local_error);
-	g_assert_no_error(local_error);
-}
-
-
-static void
-emit_brightness_changed(GDBusConnection *conn, gdouble br2)
-{
-	GError *local_error = NULL;
-	GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
-	g_variant_builder_add(builder, "{sv}", "Brightness",
-				  g_variant_new_double(br2));
-
-	g_dbus_connection_emit_signal(conn, NULL,
-					  REDSHIFT_OBJECT_PATH,
-					  "org.freedesktop.DBus.Properties",
-					  "PropertiesChanged",
-					  g_variant_new("(sa{sv}as)",
-							REDSHIFT_INTERFACE_NAME,
-							builder,
-							NULL),
-					  &local_error);
 	g_assert_no_error(local_error);
 }
 
@@ -747,9 +734,15 @@ handle_method_call(GDBusConnection *conn,
 			brightness = br2;
 			brightness_changed = TRUE;
 			screen_update_restart(conn);
-			emit_brightness_changed(conn, br2);
 		}
 
+		g_dbus_method_invocation_return_value(invocation, NULL);
+	} else if (g_strcmp0(method_name, "BrightnessReset") == 0) {
+		if (brightness >= MIN_BRIGHTNESS &&
+				brightness <= MAX_BRIGHTNESS) {
+			brightness = -1.0;
+			screen_update_restart(conn);
+		}
 		g_dbus_method_invocation_return_value(invocation, NULL);
 	}
 }
@@ -771,23 +764,49 @@ handle_get_property(GDBusConnection *conn,
 		ret = g_variant_new_string(period_names[period]);
 	} else if (g_strcmp0(prop_name, "Temperature") == 0) {
 		ret = g_variant_new_uint32(color_setting.temperature);
-	} else if (g_strcmp0(prop_name, "CurrentLatitude") == 0) {
+	} else if (g_strcmp0(prop_name, "CurrentLocation") == 0) {
 		gdouble lat = latitude;
 		if (forced_location_cookie != 0) lat = forced_lat;
-		ret = g_variant_new_double(lat);
-	} else if (g_strcmp0(prop_name, "CurrentLongitude") == 0) {
 		gdouble lon = longitude;
 		if (forced_location_cookie != 0) lon = forced_lon;
-		ret = g_variant_new_double(lon);
+		GVariant* coords[2] = { g_variant_new_double(lon),
+			g_variant_new_double(lat) };
+		ret = g_variant_new_array(NULL, coords, 2);
 	} else if (g_strcmp0(prop_name, "TemperatureDay") == 0) {
 		ret = g_variant_new_uint32(options.scheme.day.temperature);
 	} else if (g_strcmp0(prop_name, "TemperatureNight") == 0) {
 		ret = g_variant_new_uint32(options.scheme.night.temperature);
 	} else if (g_strcmp0(prop_name, "Brightness") == 0) {
 		ret = g_variant_new_double(color_setting.brightness);
+	} else if (g_strcmp0(prop_name, "BrightnessDay") == 0) {
+		ret = g_variant_new_double(options.scheme.day.brightness);
+	} else if (g_strcmp0(prop_name, "BrightnessNight") == 0) {
+		ret = g_variant_new_double(options.scheme.night.brightness);
 	}
 
 	return ret;
+}
+
+
+static void
+emit_brightness_setting_changed(GDBusConnection *conn,
+		const char* property_name, gdouble br2)
+{
+	GError *local_error = NULL;
+	GVariantBuilder *builder = g_variant_builder_new(G_VARIANT_TYPE_ARRAY);
+	g_variant_builder_add(builder, "{sv}", property_name,
+				  g_variant_new_double(br2));
+
+	g_dbus_connection_emit_signal(conn, NULL,
+					  REDSHIFT_OBJECT_PATH,
+					  "org.freedesktop.DBus.Properties",
+					  "PropertiesChanged",
+					  g_variant_new("(sa{sv}as)",
+							REDSHIFT_INTERFACE_NAME,
+							builder,
+							NULL),
+					  &local_error);
+	g_assert_no_error(local_error);
 }
 
 static gboolean
@@ -869,7 +888,32 @@ handle_set_property(GDBusConnection *conn,
 			brightness = br;
 			brightness_changed = TRUE;
 			screen_update_restart(conn);
-			emit_brightness_changed(conn, br);
+		}
+	} else if (g_strcmp0(prop_name, "BrightnessDay") == 0) {
+		gdouble br = g_variant_get_double(value);
+		if (br < MIN_BRIGHTNESS || br > MAX_BRIGHTNESS) {
+			g_set_error(error,
+				    G_IO_ERROR,
+				    G_IO_ERROR_FAILED,
+				    "Brightness out of bounds");
+		} else if (options.scheme.day.brightness != br) {
+			options.scheme.day.brightness = br;
+			screen_update_restart(conn);
+			emit_brightness_setting_changed(conn,
+				"BrightnessDay", br);
+		}
+	} else if (g_strcmp0(prop_name, "BrightnessNight") == 0) {
+		gdouble br = g_variant_get_double(value);
+		if (br < MIN_BRIGHTNESS || br > MAX_BRIGHTNESS) {
+			g_set_error(error,
+				    G_IO_ERROR,
+				    G_IO_ERROR_FAILED,
+				    "Brightness out of bounds");
+		} else if(br != options.scheme.night.brightness) {
+			options.scheme.night.brightness = br;
+			screen_update_restart(conn);
+			emit_brightness_setting_changed(conn,
+				"BrightnessNight", br);
 		}
 	}
 
