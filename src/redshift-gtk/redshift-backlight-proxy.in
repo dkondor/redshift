@@ -1,0 +1,59 @@
+#!/usr/bin/env python3
+#  backlight_proxy -- Simple proxy to redshift with system backlight interface
+#  
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 2 of the License, or
+#  (at your option) any later version.
+#  
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#  
+#  You should have received a copy of the GNU General Public License
+#  along with this program. If not, see <http://www.gnu.org/licenses/>.
+#  
+#  Copyright (c) 2020  Daniel Kondor <kondor.dani@gmail.com>
+
+import sys
+
+# Some non-standard install paths may need to be added
+
+sys.path.append('@pythondir@')
+import redshift_gtk.controller_dbus as cd
+import redshift_gtk.dbus_backlight as db
+
+from gi.repository import GLib
+
+
+class backlight_proxy:
+	def __init__(self):
+		self.redshift = cd.RedshiftController(name = 'backlight_proxy')
+		self.backlight = db.backlight_listener()
+		
+		self.redshift.connect('value-changed', self.redshift_callback)
+		self.backlight.connect('brightness-changed', self.backlight_callback)
+	
+	# Callback when the system backlight value changed
+	def backlight_callback(self, caller, value):
+		value = value / 100.0
+		print('Calling redshift to set brightness with value: {}'.format(value))
+		self.redshift.brightness = value
+
+	# Callback from redshift when a property changed
+	def redshift_callback(self, caller, key, value):
+		if key == 'Brightness':
+			value = round(100*value.get_double())
+			print('Brightness changed in redshift: {}'.format(value))
+			self.backlight.brightness = value
+
+
+def main(args):
+    proxy = backlight_proxy()
+    loop = GLib.MainLoop()
+    loop.run()
+
+if __name__ == '__main__':
+    import sys
+    sys.exit(main(sys.argv))
