@@ -416,6 +416,7 @@ screen_update_cb(gpointer data)
 							    NULL),
 					      &local_error);
 		g_assert_no_error(local_error);
+		g_variant_builder_unref(builder);
 	}
 
 	/* If the temperature difference is large enough,
@@ -481,6 +482,7 @@ emit_position_changed(GDBusConnection *conn, gdouble lat, gdouble lon)
 						    NULL),
 				      &local_error);
 	g_assert_no_error(local_error);
+	g_variant_builder_unref(builder);
 }
 
 
@@ -807,6 +809,7 @@ emit_brightness_setting_changed(GDBusConnection *conn,
 							NULL),
 					  &local_error);
 	g_assert_no_error(local_error);
+	g_variant_builder_unref(builder);
 }
 
 static gboolean
@@ -847,6 +850,7 @@ handle_set_property(GDBusConnection *conn,
 								    NULL),
 						      &local_error);
 			g_assert_no_error(local_error);
+			g_variant_builder_unref(builder);
 		}
 	} else if (g_strcmp0(prop_name, "TemperatureNight") == 0) {
 		guint32 temp = g_variant_get_uint32(value);
@@ -876,6 +880,7 @@ handle_set_property(GDBusConnection *conn,
 								    NULL),
 						      &local_error);
 			g_assert_no_error(local_error);
+			g_variant_builder_unref(builder);
 		}
 	} else if (g_strcmp0(prop_name, "Brightness") == 0) {
 		gdouble br = g_variant_get_double(value);
@@ -1153,6 +1158,13 @@ main(int argc, char *argv[])
 	/* Free up location provider */
 	if (need_location)
 		options.provider->free(location_state);
+	
+	/* Free up remaining memory */
+	g_main_loop_unref(mainloop);
+	g_dbus_node_info_unref(introspection_data);
+	g_hash_table_unref(cookies);
+	g_hash_table_unref(inhibitors);
+	config_ini_free(&config_state);
 
 	return 0;
 }

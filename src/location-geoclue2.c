@@ -45,6 +45,7 @@
 typedef struct {
 	GMainLoop *loop;
 	GThread *thread;
+	GDBusProxy *geoclue_client;
 	GMutex lock;
 	int pipe_fd_read;
 	int pipe_fd_write;
@@ -55,6 +56,7 @@ typedef struct {
 	location_provider_callback_func* cb;
 	void* cb_data;
 	int use_thread;
+	guint watcher_id;
 } location_geoclue2_state_t;
 
 
@@ -124,10 +126,12 @@ geoclue_client_signal_cb(GDBusProxy *client, gchar *sender_name,
 	GVariant *lat_v = g_dbus_proxy_get_cached_property(
 		location, "Latitude");
 	state->latitude = g_variant_get_double(lat_v);
+	g_variant_unref(lat_v);
 
 	GVariant *lon_v = g_dbus_proxy_get_cached_property(
 		location, "Longitude");
 	state->longitude = g_variant_get_double(lon_v);
+	g_variant_unref(lon_v);
 
 	state->available = 1;
 
@@ -137,6 +141,8 @@ geoclue_client_signal_cb(GDBusProxy *client, gchar *sender_name,
 	} else {
 		if (state->cb) state->cb(state->cb_data);
 	}
+	
+	g_object_unref(location);
 }
 
 /* Callback when GeoClue name appears on the bus */
@@ -271,13 +277,14 @@ on_name_appeared(GDBusConnection *conn, const gchar *name,
 			g_free(dbus_error);
 		}
 		g_error_free(error);
-		g_object_unref(geoclue_client);
 		g_object_unref(geoclue_manager);
+		g_object_unref(geoclue_client);
 		mark_error(state);
 		return;
 	}
-
+	g_object_unref(geoclue_manager);
 	g_variant_unref(ret_v);
+	state->geoclue_client = geoclue_client;
 }
 
 /* Callback when GeoClue disappears from the bus */
@@ -321,7 +328,7 @@ run_geoclue2_loop(void *state_)
 		state->loop = g_main_loop_new(context, FALSE);
 	}
 
-	guint watcher_id = g_bus_watch_name(
+	state->watcher_id = g_bus_watch_name(
 		G_BUS_TYPE_SYSTEM,
 		"org.freedesktop.GeoClue2",
 		G_BUS_NAME_WATCHER_FLAGS_AUTO_START,
@@ -344,10 +351,12 @@ run_geoclue2_loop(void *state_)
 		g_io_channel_unref(pipe_channel);
 		close(state->pipe_fd_write);
 
-		g_bus_unwatch_name(watcher_id);
+		g_bus_unwatch_name(state->watcher_id);
 
 		g_main_loop_unref(state->loop);
 		g_main_context_unref(context);
+		
+		if(state->geoclue_client) g_object_unref(state->geoclue_client);
 	}
 
 	return NULL;
@@ -365,6 +374,8 @@ location_geoclue2_init(location_geoclue2_state_t **state)
 	(*state)->thread = NULL;
 	(*state)->use_thread = 1;
 	(*state)->cb = 0;
+	(*state)->geoclue_client = NULL;
+	(*state)->watcher_id = 0;
 	return 0;
 }
 
@@ -408,8 +419,14 @@ location_geoclue2_free(location_geoclue2_state_t *state)
 	}
 
 	/* Closing the pipe should cause the thread to exit. */
-	if(state->thread) g_thread_join(state->thread);
-	state->thread = NULL;
+	if(state->thread) {
+		g_thread_join(state->thread);
+		state->thread = NULL;
+	}
+	else {
+		if(state->watcher_id) g_bus_unwatch_name(state->watcher_id);
+		if(state->geoclue_client) g_object_unref(state->geoclue_client);
+	}
 
 	g_mutex_clear(&state->lock);
 
